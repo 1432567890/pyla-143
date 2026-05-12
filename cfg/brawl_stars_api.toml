@@ -3,7 +3,7 @@
 
 player_tag = "#YOURTAG"
 timeout_seconds = 15
-enabled = true
+enabled = false
 confirm_goal_reached = true
 poll_interval_sec = 60
 retry_backoff_sec = 30

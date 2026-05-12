@@ -46,6 +46,17 @@ Manual developer setup:
 - Run `python setup.py --pyla-install`.
 - Run `python main.py`.
 
+Config files:
+- Committed defaults live in `cfg/*.toml.example`.
+- Real local configs are `cfg/*.toml` and are ignored by Git because they may contain tags, email, passwords, API tokens, Telegram bot tokens, Discord webhooks, and device paths.
+- First setup from a clean clone:
+  `python scripts/sync_configs.py`
+- After pulling updates, merge new config keys without overwriting secrets:
+  `python scripts/sync_configs.py`
+- Preview changes:
+  `python scripts/sync_configs.py --dry-run`
+- Do not commit filled `cfg/*.toml` files. Commit only sanitized `cfg/*.toml.example` updates.
+
 Brawl Stars API trophy autofill :
 - Create a developer account at https://developer.brawlstars.com/
 - Open `cfg/brawl_stars_api.toml`.
@@ -110,6 +121,8 @@ Telegram notifications and remote control :
 - Open `cfg/telegram_config.toml`.
 - Create a bot with `@BotFather`, then paste the token into `bot_token`.
 - Set `enabled = true`.
+- Set `notification_buttons_mode = "minimal"` to keep normal notifications clean.
+- Set `attach_screenshot_on_game_finished = true` to attach the post-match screenshot to match-finished notifications.
 - Open the Telegram bot on your phone and send `/start` or `/help` once. That chat is remembered for notifications.
 - Commands:
   `/status`, `/pause`, `/resume`, `/screenshot`, `/restart_game`, `/help`.

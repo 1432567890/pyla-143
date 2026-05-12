@@ -91,8 +91,6 @@ joystick_micro_steps = 2
 joystick_debug = "no"
 brawler_ocr_attempts = 3
 brawler_ocr_confidence_threshold = 0.86
-
-# Movement tuning
 roam_direction_hold_time = 1.5
 roam_center_bias = 0.25
 retreat_strafe_fraction = 0.5

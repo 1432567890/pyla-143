@@ -169,7 +169,7 @@ class Hub:
         # Main window
         # -----------------------------------------------------------------------------------------
         self.app = ctk.CTk()
-        self.app.title(f"Pyla 143 Hub – {self.version_str}")
+        self.app.title(f"PylaAi-143 Hub – {self.version_str}")
         self.app.geometry(f"{S(1000)}x{S(750)}")
         self.app.resizable(False, False)
         self.app.configure(fg_color=COLORS["bg"])
@@ -686,7 +686,7 @@ class Hub:
     def _add_version_label(self, frame):
         version_label = ctk.CTkLabel(
             frame,
-            text="Pyla 143",
+            text="PylaAi-143",
             font=font(S(14), "bold"),
             text_color=COLORS["subtle"]
         )

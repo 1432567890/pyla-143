@@ -19,6 +19,8 @@ class AutoAimDecision:
     los_status: str = "unknown"
     target_bbox: tuple = None
     cooldown_remaining_ms: int = 0
+    visible_enemy_count: int = 0
+    closest_enemy_distance: float = None
 
 
 def _center(box):
@@ -125,8 +127,9 @@ def choose_auto_aim(
 ):
     if not player_pos:
         return AutoAimDecision(False, reason="target_invalid")
+    visible_enemy_count = len(enemy_data or [])
     if not enemy_data:
-        return AutoAimDecision(False, reason="no_enemy")
+        return AutoAimDecision(False, reason="no_enemy", visible_enemy_count=0)
     if attack_range <= 0:
         return AutoAimDecision(False, reason="target_invalid", attack_range=attack_range)
 
@@ -134,9 +137,12 @@ def choose_auto_aim(
     dangerous_close_range = dangerous_close_range if dangerous_close_range is not None else max(close_tap_range, min(150.0, attack_range * 0.40))
     best = None
 
+    closest_enemy_distance = None
     for enemy in enemy_data:
         target = _center(enemy)
         distance = math.hypot(target[0] - player_pos[0], target[1] - player_pos[1])
+        if closest_enemy_distance is None or distance < closest_enemy_distance:
+            closest_enemy_distance = distance
         if distance > attack_range:
             decision = AutoAimDecision(
                 False,
@@ -145,6 +151,8 @@ def choose_auto_aim(
                 attack_range=attack_range,
                 reason="enemy_out_of_range",
                 target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
             )
             if best is None or distance < (best.distance or float("inf")):
                 best = decision
@@ -159,6 +167,8 @@ def choose_auto_aim(
                 reason="los_blocked",
                 los_status="blocked",
                 target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
             )
             if best is None or distance < (best.distance or float("inf")):
                 best = decision
@@ -189,6 +199,8 @@ def choose_auto_aim(
                 velocity=velocity,
                 reason="prediction_invalid",
                 target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
             )
             if best is None or predicted_distance < (best.distance or float("inf")):
                 best = decision
@@ -207,6 +219,8 @@ def choose_auto_aim(
                 reason="los_blocked",
                 los_status="predicted_blocked",
                 target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
             )
             if best is None or predicted_distance < (best.distance or float("inf")):
                 best = decision
@@ -219,6 +233,8 @@ def choose_auto_aim(
         confidence = 1.0
         confidence *= _range_score(predicted_distance, attack_range)
         confidence *= _target_box_score(enemy)
+        if close_override:
+            confidence = max(confidence, 0.42)
         if lead_distance > attack_range * 0.22:
             confidence *= 0.78
         elif lead_distance > 0:
@@ -258,6 +274,8 @@ def choose_auto_aim(
             close_range_override=close_override,
             los_status="clear" if predicted_los_clear else "close_override",
             target_bbox=tuple(enemy),
+            visible_enemy_count=visible_enemy_count,
+            closest_enemy_distance=closest_enemy_distance,
         )
 
         if best is None:
@@ -270,7 +288,17 @@ def choose_auto_aim(
         if decision_key < best_key:
             best = decision
 
-    return best or AutoAimDecision(False, reason="no_valid_target", attack_range=attack_range)
+    if best:
+        best.visible_enemy_count = visible_enemy_count
+        best.closest_enemy_distance = closest_enemy_distance
+        return best
+    return AutoAimDecision(
+        False,
+        reason="no_valid_target",
+        attack_range=attack_range,
+        visible_enemy_count=visible_enemy_count,
+        closest_enemy_distance=closest_enemy_distance,
+    )
 
 
 def detect_aim_line_angle(frame, player_pos):

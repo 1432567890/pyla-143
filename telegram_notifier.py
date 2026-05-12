@@ -9,54 +9,13 @@ import aiohttp
 import numpy as np
 from PIL import Image
 
+from localization import get_config_language, normalize_language, tr
 from utils import _config_bool, load_toml_as_dict, save_dict_as_toml
 
 
 TELEGRAM_CONFIG_PATH = "cfg/telegram_config.toml"
 LOCAL_TELEGRAM_CONFIG_PATH = "cfg/telegram_config.local.toml"
 TELEGRAM_CHATS_PATH = "cfg/telegram_chats.toml"
-
-
-EVENT_TITLES = {
-    "match": "Match finished",
-    "brawler_complete": "Brawler target reached",
-    "completed": "All targets complete",
-    "bot_is_stuck": "Bot needs attention",
-    "test": "Telegram test",
-    "start": "Pyla 143 started",
-    "stop": "Pyla 143 stopped",
-    "pause": "Pyla 143 paused",
-    "resume": "Pyla 143 resumed",
-    "error": "Pyla 143 error",
-    "brawler_changed": "Brawler changed",
-    "config_reload": "Config reloaded",
-    "trophy_update": "Trophy update",
-    "heartbeat": "Heartbeat",
-}
-
-
-FIELD_LABELS = {
-    "brawler": "Brawler",
-    "result": "Result",
-    "started_trophies": "Started trophies",
-    "trophies": "Current trophies",
-    "target": "Target",
-    "wins": "Wins",
-    "win_streak": "Win streak",
-    "brawlers_left": "Brawlers left",
-    "ips": "IPS",
-    "state": "State",
-    "emulator": "Emulator",
-    "adb_device": "ADB device",
-    "runtime": "Runtime",
-    "before": "Before",
-    "after": "After",
-    "delta": "Delta",
-    "playstyle": "Playstyle",
-    "mode": "Mode",
-    "auto_aim": "Auto-aim",
-    "status": "Status",
-}
 
 
 def _clean_chat_id(value: Any) -> str:
@@ -90,16 +49,21 @@ def load_telegram_settings() -> dict[str, Any]:
     settings["admin_ids"] = _as_admin_ids(settings.get("admin_ids"))
     settings.setdefault("send_match_summary", True)
     settings.setdefault("include_screenshot", True)
+    settings.setdefault("attach_screenshot_on_game_finished", settings.get("include_screenshot", True))
     settings.setdefault("remote_control_enabled", True)
     settings.setdefault("poll_timeout_seconds", 25)
-    settings.setdefault("heartbeat_enabled", True)
+    settings.setdefault("heartbeat_enabled", False)
     settings.setdefault("heartbeat_interval_sec", 300)
     settings.setdefault("notify_on_start", True)
     settings.setdefault("notify_on_stop", True)
     settings.setdefault("notify_on_error", True)
+    settings.setdefault("notify_on_game_finished", settings.get("send_match_summary", True))
     settings.setdefault("notify_on_brawler_change", True)
+    settings.setdefault("notify_on_goal_confirmed", True)
     settings.setdefault("notify_on_config_reload", True)
     settings.setdefault("notify_on_trophy_update", True)
+    settings.setdefault("notification_buttons_mode", "minimal")
+    settings["language"] = normalize_language(settings.get("language") or get_config_language())
     return settings
 
 
@@ -134,8 +98,8 @@ def notification_chat_ids(settings: dict[str, Any] | None = None) -> list[str]:
     return ordered
 
 
-def _format_title(event_type: str, details: dict[str, Any]) -> str:
-    title = EVENT_TITLES.get(event_type, "Pyla 143 update")
+def _format_title(event_type: str, details: dict[str, Any], language: str | None = None) -> str:
+    title = tr(f"telegram.title.{event_type}", language, "Pyla 143 update")
     if event_type == "match":
         result = str(details.get("result") or "finished")
         brawler = str(details.get("brawler") or "").title()
@@ -145,18 +109,24 @@ def _format_title(event_type: str, details: dict[str, Any]) -> str:
     return title
 
 
-def _format_message(event_type: str, details: dict[str, Any]) -> str:
-    lines = [f"<b>{_format_title(event_type, details)}</b>"]
-    if event_type in {"start", "stop", "pause", "resume", "error", "brawler_changed", "config_reload", "trophy_update", "heartbeat"}:
-        lines.append("────────────────")
+def _field_label(key: str, language: str | None = None) -> str:
+    return tr(f"field.{key}", language, key.replace("_", " ").title())
+
+
+def _format_message(event_type: str, details: dict[str, Any], language: str | None = None) -> str:
+    language = normalize_language(language or details.get("language") or get_config_language())
+    lines = [f"<b>{html.escape(_format_title(event_type, details, language))}</b>", "────────────────"]
     message = str(details.get("message") or details.get("reason") or "").strip()
     if message:
         lines.append(html.escape(message))
 
-    hidden = {"message", "reason", "event_type"}
+    hidden = {"message", "reason", "event_type", "language"}
     ordered = [
         "brawler",
         "result",
+        "before",
+        "after",
+        "delta",
         "started_trophies",
         "trophies",
         "target",
@@ -178,30 +148,43 @@ def _format_message(event_type: str, details: dict[str, Any]) -> str:
         text = str(value)
         if len(text) > 180:
             text = text[:177] + "..."
-        lines.append(f"{FIELD_LABELS.get(key, key.replace('_', ' ').title())}: {html.escape(text)}")
+        lines.append(f"{_field_label(key, language)}: {html.escape(text)}")
     return "\n".join(lines)
 
 
-def main_keyboard(paused=False, heartbeat_enabled=True) -> dict[str, Any]:
-    pause_text = "Resume" if paused else "Pause"
-    heartbeat_text = "Heartbeat off" if heartbeat_enabled else "Heartbeat on"
+def main_keyboard(paused=False, heartbeat_enabled=True, language: str | None = None) -> dict[str, Any]:
+    language = normalize_language(language or get_config_language())
+    pause_text = tr("telegram.button.resume" if paused else "telegram.button.pause", language)
+    heartbeat_text = tr("telegram.button.heartbeat_off" if heartbeat_enabled else "telegram.button.heartbeat_on", language)
     return {
         "inline_keyboard": [
             [
-                {"text": "Status", "callback_data": "status"},
+                {"text": tr("telegram.button.status", language), "callback_data": "status"},
                 {"text": pause_text, "callback_data": "resume" if paused else "pause"},
-                {"text": "Stop", "callback_data": "stop"},
+                {"text": tr("telegram.button.stop", language), "callback_data": "stop"},
             ],
             [
-                {"text": "Reload config", "callback_data": "reload_config"},
-                {"text": "Change brawler", "callback_data": "brawler:0"},
+                {"text": tr("telegram.button.reload_config", language), "callback_data": "reload_config"},
+                {"text": tr("telegram.button.change_brawler", language), "callback_data": "brawler:0"},
             ],
             [
-                {"text": "Stats", "callback_data": "stats"},
+                {"text": tr("telegram.button.stats", language), "callback_data": "stats"},
                 {"text": heartbeat_text, "callback_data": "heartbeat"},
             ],
         ]
     }
+
+
+def notification_keyboard(mode: str = "minimal", language: str | None = None) -> dict[str, Any] | None:
+    mode = str(mode or "minimal").strip().lower()
+    if mode in {"none", "off", "disabled"}:
+        return None
+    language = normalize_language(language or get_config_language())
+    if mode == "full":
+        return main_keyboard(language=language)
+    if mode == "minimal":
+        return {"inline_keyboard": [[{"text": tr("telegram.button.status", language), "callback_data": "status"}]]}
+    return None
 
 
 def _image_to_png_bytes(screenshot: Any) -> bytes | None:
@@ -381,6 +364,7 @@ async def async_notify_user(
         "start": "notify_on_start",
         "stop": "notify_on_stop",
         "error": "notify_on_error",
+        "match": "notify_on_game_finished",
         "brawler_changed": "notify_on_brawler_change",
         "config_reload": "notify_on_config_reload",
         "trophy_update": "notify_on_trophy_update",
@@ -390,14 +374,18 @@ async def async_notify_user(
     if event_type == "match" and not _config_bool(settings.get("send_match_summary"), False):
         return False
 
-    text = _format_message(event_type, details)
+    language = settings.get("language")
+    text = _format_message(event_type, details, language=language)
     include_screenshot = _config_bool(settings.get("include_screenshot"), True)
+    if event_type == "match":
+        include_screenshot = _config_bool(settings.get("attach_screenshot_on_game_finished"), include_screenshot)
+    reply_markup = notification_keyboard(settings.get("notification_buttons_mode"), language)
     sent_any = False
     for chat_id in chat_ids:
         if include_screenshot and screenshot is not None:
             sent = await async_send_photo(chat_id, screenshot, caption=text, token=token)
         else:
-            sent = await async_send_message(chat_id, text, token=token)
+            sent = await async_send_message(chat_id, text, token=token, reply_markup=reply_markup)
         sent_any = sent_any or sent
     if sent_any:
         print(f"Telegram notification sent: {event_type}")

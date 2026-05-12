@@ -324,6 +324,9 @@ class StageManager:
         }
         if extra:
             details.update(extra)
+        api_status = getattr(self, "goal_confirmation_status", {}).get("status")
+        if api_status and api_status != "not_requested":
+            details.setdefault("api_confirmation", api_status)
         return details
 
     @staticmethod
@@ -520,7 +523,6 @@ class StageManager:
             return False
         if not any(row.get("selection_method") == "lowest_trophies" for row in self.brawlers_pick_data):
             return False
-
         old_front_brawler = self.brawlers_pick_data[0].get("brawler")
         try:
             player_data = self.fetch_push_all_player_data(force_token_refresh=False)
@@ -675,7 +677,11 @@ class StageManager:
         value = self._number_or_default(value, 0)
         value = max(value, saved_value)
 
-        if value >= push_current_brawler_till and type_of_push == "trophies" and not self.confirm_goal_reached_via_api(
+        api_confirmation_enabled = self._config_bool(
+            load_toml_as_dict("cfg/brawl_stars_api.toml").get("enabled", False),
+            False,
+        )
+        if api_confirmation_enabled and value >= push_current_brawler_till and type_of_push == "trophies" and not self.confirm_goal_reached_via_api(
                 self.brawlers_pick_data[0].get("brawler", ""),
                 push_current_brawler_till,
         ):
@@ -1025,7 +1031,11 @@ class StageManager:
                 value = self._number_or_default(value, 0)
                 use_play_again = self.should_use_play_again(value, push_current_brawler_till)
 
-                if value >= push_current_brawler_till and type_to_push == "trophies" and not self.confirm_goal_reached_via_api(
+                api_confirmation_enabled = self._config_bool(
+                    load_toml_as_dict("cfg/brawl_stars_api.toml").get("enabled", False),
+                    False,
+                )
+                if api_confirmation_enabled and value >= push_current_brawler_till and type_to_push == "trophies" and not self.confirm_goal_reached_via_api(
                         current_brawler,
                         push_current_brawler_till,
                 ):

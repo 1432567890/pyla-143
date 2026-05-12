@@ -4,6 +4,14 @@
 *.pyc
 cfg/pyla_stats.json
 cfg/match_history.toml
+cfg/bot_config.toml
+cfg/brawl_stars_api.toml
+cfg/discord_config.toml
+cfg/general_config.toml
+cfg/lobby_config.toml
+cfg/login.toml
+cfg/telegram_config.toml
+cfg/time_tresholds.toml
 cfg/telegram_config.local.toml
 cfg/telegram_chats.toml
 cfg/adaptive_state.json
@@ -18,7 +26,7 @@ venv/
 /dist
 /build
 main.spec
-PylaAi-XXZ.zip
+PylaAi-143.zip
 start.bat
 run.py
 web_ui/server.py

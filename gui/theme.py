@@ -1,28 +1,28 @@
 import customtkinter as ctk
 
-FONT_FAMILY = "Nunito"
+FONT_FAMILY = "Arial"
 
 COLORS = {
-    "bg": "#0B0F14",
-    "surface": "#111821",
-    "panel": "#151D27",
-    "panel_alt": "#1B2633",
-    "card": "#182231",
-    "card_hover": "#223044",
-    "border": "#2D3A4D",
-    "border_soft": "#243144",
-    "text": "#EEF4FA",
-    "muted": "#9AA8B7",
-    "subtle": "#697789",
-    "accent": "#3B82F6",
-    "accent_hover": "#60A5FA",
-    "accent_strong": "#2563EB",
-    "accent_2": "#22D3EE",
-    "danger": "#FB7185",
-    "success": "#34D399",
-    "link": "#67E8F9",
-    "warning": "#F59E0B",
-    "violet": "#8B5CF6",
+    "bg": "#242424",
+    "surface": "#2B2B2B",
+    "panel": "#4A4A4A",
+    "panel_alt": "#333333",
+    "card": "#2B2B2B",
+    "card_hover": "#555555",
+    "border": "#555555",
+    "border_soft": "#444444",
+    "text": "#FFFFFF",
+    "muted": "#CCCCCC",
+    "subtle": "#AAAAAA",
+    "accent": "#BB3A3A",
+    "accent_hover": "#BB3A3A",
+    "accent_strong": "#AA2A2A",
+    "accent_2": "#777777",
+    "danger": "#FF5555",
+    "success": "#55AA55",
+    "link": "#4DA3FF",
+    "warning": "#D8A03D",
+    "violet": "#777777",
 }
 
 

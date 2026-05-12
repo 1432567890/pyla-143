@@ -48,6 +48,14 @@ Pyla 143 is an external Brawl Stars automation bot focused on Showdown trio beha
   - `python -m unittest tests.test_auto_aim tests.test_tactical_movement`
   - `python -m unittest tests.test_telegram_support tests.test_telegram_rendering tests.test_pyla_stats tests.test_brawler_selection_filters tests.test_config_reload`
 
+## Config Hygiene
+
+- Version sanitized defaults as `cfg/*.toml.example`.
+- Keep real `cfg/*.toml` files local and ignored; they can contain player tags, email, passwords, API tokens, Telegram bot tokens, Discord webhooks/tokens, admin IDs, and device paths.
+- Create or update local configs with `python scripts/sync_configs.py`.
+- Preview config merges with `python scripts/sync_configs.py --dry-run`.
+- The sync script adds new keys from examples, keeps obsolete top-level keys for compatibility, creates backups before writes, and preserves known secret keys.
+
 ## Development Rules For Agents
 
 - Read the architecture before changing code.

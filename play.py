@@ -62,7 +62,7 @@ class Movement:
         self.time_since_hypercharge_checked = time.time()
         self.is_hypercharge_ready = False
         self.window_controller = window_controller
-        self.attack_cooldown = float(bot_config.get("attack_cooldown", 0.16))
+        self.attack_cooldown = float(bot_config.get("attack_cooldown", 0.12))
         self.last_attack_time = 0.0
         self.TILE_SIZE = 60
         # Wall-based stuck detector: samples wall bboxes on an interval, ignores
@@ -119,7 +119,7 @@ class Movement:
         self.lead_shots_enabled = str(bot_config.get("lead_shots", "yes")).lower() in ("yes", "true", "1")
         self.aimed_attacks_enabled = str(bot_config.get("aimed_attacks", "no")).lower() in ("yes", "true", "1")
         self.projectile_speed_px_s = float(bot_config.get("projectile_speed_px_s", 900.0))
-        self.auto_aim_min_confidence = float(bot_config.get("auto_aim_min_confidence", 0.62))
+        self.auto_aim_min_confidence = float(bot_config.get("auto_aim_min_confidence", 0.54))
         self.auto_aim_close_tap_range = float(bot_config.get("auto_aim_close_tap_range", 0))
         self.close_range_attack_override = str(bot_config.get("close_range_attack_override", "true")).lower() in ("yes", "true", "1")
         self.attack_decision_debug = str(bot_config.get("attack_decision_debug", bot_config.get("auto_aim_debug", "yes"))).lower() in ("yes", "true", "1")
@@ -135,6 +135,7 @@ class Movement:
         self._flicker_state = {"active_until": 0.0, "last_trigger": 0.0, "confidence": 0.0}
         self._dodge_state = {"angle": None, "mode": "no_dodge", "score": 0.0, "until": 0.0}
         self._suppress_attack_until = 0.0
+        self._last_aim_attempt_time = 0.0
         self._enemy_track = {}
         self.enemy_velocity = (0.0, 0.0)
         self.velocity_ema_alpha = float(bot_config.get("velocity_ema_alpha", 0.40))
@@ -211,8 +212,18 @@ class Movement:
             print("[AIM]", *args)
 
     def auto_aim_attack(self, brawler, player_pos, enemy_data, walls, attack_range=None):
-        if time.time() < getattr(self, "_suppress_attack_until", 0.0):
-            self._aimlog("skip: defensive_retreat_active")
+        now = time.time()
+        elapsed = now - getattr(self, "_last_aim_attempt_time", 0.0)
+        aim_frequency_hz = 0.0 if elapsed <= 0 else min(99.0, 1.0 / elapsed)
+        self._last_aim_attempt_time = now
+        if now < getattr(self, "_suppress_attack_until", 0.0):
+            remaining = int((getattr(self, "_suppress_attack_until", 0.0) - now) * 1000)
+            self._aimlog(
+                "aim_attempt "
+                f"attack_allowed=False attack_denied_reason=defensive_retreat_active "
+                f"cooldown_remaining_ms={remaining} visible_enemy_count={len(enemy_data or [])} "
+                f"input_busy=True aim_frequency_hz={aim_frequency_hz:.2f}"
+            )
             return False
         if attack_range is None:
             _, attack_range, _ = self.get_brawler_range(brawler)
@@ -230,7 +241,7 @@ class Movement:
             track_enemy_velocity=self.track_enemy_velocity,
             velocity_confidence=lambda: getattr(self, "enemy_velocity_confidence", 0.0),
             projectile_speed=self.projectile_speed_px_s,
-            current_time=time.time(),
+            current_time=now,
             aim_line_angle=aim_line_angle,
             min_confidence=getattr(self, "auto_aim_min_confidence", 0.62),
             close_tap_range=close_tap_range,
@@ -243,11 +254,13 @@ class Movement:
         dist_s = None if decision.distance is None else int(decision.distance)
         self._aimlog(
             "attack_decision "
+            f"attack_allowed={decision.should_fire} visible_enemy_count={decision.visible_enemy_count} "
             f"target={target_s} target_bbox={decision.target_bbox} "
-            f"closest_enemy_distance={dist_s} attack_range={int(attack_range)} "
+            f"selected_target={target_s} closest_enemy_distance={dist_s} attack_range={int(attack_range)} "
             f"predicted_point={predicted_s} angle={angle_s} confidence={decision.confidence:.2f} "
-            f"threshold={decision.threshold:.2f} close_range_override={decision.close_range_override} "
-            f"los_status={decision.los_status} tap={decision.use_tap} reason={decision.reason}"
+            f"confidence_threshold={decision.threshold:.2f} close_range_override={decision.close_range_override} "
+            f"line_of_sight={decision.los_status} input_busy=False aim_frequency_hz={aim_frequency_hz:.2f} "
+            f"tap={decision.use_tap} reason={decision.reason}"
         )
         if not decision.should_fire:
             self._aimlog(f"attack_denied_reason={decision.reason}")
@@ -258,7 +271,15 @@ class Movement:
             current_time = time.time()
             if current_time - self.last_attack_time < self.attack_cooldown:
                 remaining = max(0.0, self.attack_cooldown - (current_time - self.last_attack_time))
-                self._aimlog(f"attack_denied_reason=attack_on_cooldown cooldown_remaining_ms={int(remaining * 1000)}")
+                self._aimlog(
+                    "attack_decision "
+                    f"attack_allowed=False attack_denied_reason=attack_on_cooldown "
+                    f"cooldown_remaining_ms={int(remaining * 1000)} visible_enemy_count={decision.visible_enemy_count} "
+                    f"selected_target={target_s} closest_enemy_distance={dist_s} attack_range={int(attack_range)} "
+                    f"confidence={decision.confidence:.2f} confidence_threshold={decision.threshold:.2f} "
+                    f"close_range_override={decision.close_range_override} line_of_sight={decision.los_status} "
+                    f"input_busy=True aim_frequency_hz={aim_frequency_hz:.2f}"
+                )
                 return False
             self.last_attack_time = current_time
         if hasattr(self.window_controller, "aim_attack_angle"):
@@ -1942,9 +1963,12 @@ class Play(Movement):
                 )
                 if retreat_angle is not None:
                     angle = retreat_angle
+                    attack_suppression = 0.0
+                    if not (enemy_distance is not None and enemy_distance <= attack_range * 0.72):
+                        attack_suppression = min(0.25, self.flicker_retreat_hold_seconds)
                     self._suppress_attack_until = max(
                         getattr(self, "_suppress_attack_until", 0.0),
-                        time.time() + min(0.45, self.flicker_retreat_hold_seconds),
+                        time.time() + attack_suppression,
                     )
                     vlog(
                         f"flicker retreat -> angle={angle:.1f} "

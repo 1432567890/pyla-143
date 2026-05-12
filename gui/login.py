@@ -3,7 +3,6 @@ import sys
 
 import customtkinter as ctk  # Import the customtkinter library
 from gui.api import check_if_exists
-from gui.theme import COLORS, apply_theme, font
 from utils import api_base_url, save_dict_as_toml
 
 sys.path.append(os.path.abspath('../'))
@@ -22,13 +21,13 @@ def login(logged_in_setter):
     def on_login_button_click():
         api_key = api_key_entry.get()
         if validate_api_key(api_key):
-            result_label.configure(text="Login Successful!", text_color=COLORS["success"])
+            result_label.configure(text="Login Successful!", text_color="green")
             logged_in_setter(True)
             app.destroy()
             save_dict_as_toml({"key": api_key}, "./cfg/login.toml")
             return
         else:
-            result_label.configure(text="Invalid API Key", text_color=COLORS["danger"])
+            result_label.configure(text="Invalid API Key", text_color="red")
 
     login_data = load_toml_as_dict('./cfg/login.toml')
     auth_key = login_data['key']
@@ -40,36 +39,18 @@ def login(logged_in_setter):
     app = ctk.CTk()
     app.title('API Key Login')
     app.geometry('500x200')
-    apply_theme()
-    app.configure(fg_color=COLORS["bg"])
+    ctk.set_appearance_mode("dark")
 
-    label = ctk.CTkLabel(app, text="Enter API Key:", font=font(20, "bold"), text_color=COLORS["text"])
+    label = ctk.CTkLabel(app, text="Enter API Key:", font=("Comic sans MS", 20))
     label.pack(pady=(20, 5))
 
-    api_key_entry = ctk.CTkEntry(
-        app,
-        placeholder_text="API Key",
-        font=font(20, "semibold"),
-        width=400,
-        fg_color=COLORS["panel"],
-        border_color=COLORS["border"],
-        text_color=COLORS["text"],
-    )
+    api_key_entry = ctk.CTkEntry(app, placeholder_text="API Key", font=("Comic sans MS", 20), width=400)
     api_key_entry.pack(pady=(20, 10))
 
-    login_button = ctk.CTkButton(
-        app,
-        text="Login",
-        command=on_login_button_click,
-        font=font(25, "bold"),
-        fg_color=COLORS["accent_strong"],
-        hover_color=COLORS["accent"],
-        text_color=COLORS["text"],
-        corner_radius=8,
-    )
+    login_button = ctk.CTkButton(app, text="Login", command=on_login_button_click, font=("Comic sans MS", 25))
     login_button.pack()
 
-    result_label = ctk.CTkLabel(app, text="", font=font(14, "semibold"), text_color=COLORS["muted"])
+    result_label = ctk.CTkLabel(app, text="")
     result_label.pack(pady=(10, 0))
 
     app.mainloop()

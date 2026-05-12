@@ -116,6 +116,28 @@ class AutoAimTests(unittest.TestCase):
         self.assertTrue(decision.should_fire)
         self.assertLess(decision.distance, 80)
 
+    def test_close_range_override_lowers_effective_confidence_floor(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[42, -2, 46, 2]],
+            walls=[],
+            attack_range=240,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.80,
+            close_tap_range=20,
+            dangerous_close_range=75,
+            close_range_override=True,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.reason, "close_range_override")
+        self.assertGreaterEqual(decision.confidence, 0.42)
+
 
 if __name__ == "__main__":
     unittest.main()

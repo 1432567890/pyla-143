@@ -373,7 +373,12 @@ class TelegramControlServer:
         await async_send_message(ids[0], self._heartbeat_text(), token=token)
 
     def _keyboard(self):
-        return main_keyboard(read_state(self.state_path) == PAUSED, self._heartbeat_enabled)
+        settings = self.settings_loader()
+        return main_keyboard(
+            read_state(self.state_path) == PAUSED,
+            self._heartbeat_enabled,
+            language=settings.get("language"),
+        )
 
     def _welcome_text(self) -> str:
         return self._status_text().replace("<b>Pyla 143 status</b>", "<b>Pyla 143 control</b>", 1)

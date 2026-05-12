@@ -12,8 +12,8 @@ import ctypes
 from pathlib import Path
 
 
-REPO_OWNER = "xxz-888"
-REPO_NAME = "PylaAi-XXZ"
+REPO_OWNER = "1432567890"
+REPO_NAME = "pyla-143"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
 MAIN_BRANCH_API = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits/main"
 COMMITS_API = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits"
@@ -69,7 +69,7 @@ def app_dir() -> Path:
 def request_json(url: str) -> dict:
     request = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "PylaAi-XXZ-Updater",
+        "User-Agent": "Pyla-143-Updater",
     })
     with urllib.request.urlopen(request, timeout=45) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -163,8 +163,8 @@ def write_local_update_info(project_dir: Path, sha: str | None, selected_ref: st
 
 
 def download_file(url: str, destination: Path, label: str) -> Path:
-    print(f"Downloading latest PylaAi-XXZ update ({label})...")
-    request = urllib.request.Request(url, headers={"User-Agent": "PylaAi-XXZ-Updater"})
+    print(f"Downloading latest Pyla 143 update ({label})...")
+    request = urllib.request.Request(url, headers={"User-Agent": "Pyla-143-Updater"})
     with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as handle:
         shutil.copyfileobj(response, handle)
     return destination
@@ -272,7 +272,7 @@ def find_project_root(extracted_dir: Path) -> Path:
         if (path.parent / "cfg").exists()
     ]
     if not candidates:
-        raise FileNotFoundError("Downloaded update does not look like a PylaAi-XXZ project.")
+        raise FileNotFoundError("Downloaded update does not look like a Pyla 143 project.")
     candidates.sort(key=lambda path: len(path.parts))
     return candidates[0].parent
 
@@ -396,7 +396,7 @@ def option_value(name: str) -> str | None:
 
 def main() -> int:
     if "--help" in sys.argv or "-h" in sys.argv:
-        print("PylaAi-XXZ updater")
+        print("PylaAi-143 updater")
         print("Downloads the latest GitHub update and keeps your cfg settings.")
         print("Use --ref <commit/tag/branch> to install or downgrade to a specific version.")
         print("Use --list-versions to show recent main commits you can pass to --ref.")
@@ -406,17 +406,17 @@ def main() -> int:
 
     project_dir = app_dir()
     print("=" * 50)
-    print("PylaAi-XXZ Updater")
+    print("Pyla 143 Updater")
     print("=" * 50)
     print(f"Project folder: {project_dir}")
 
     if not (project_dir / "main.py").exists():
-        print("updater.exe must be inside the PylaAi-XXZ project folder next to main.py.")
+        print("updater.exe must be inside the PylaAi-143 project folder next to main.py.")
         wait_for_enter()
         return 1
 
     if "--smoke-test" in sys.argv:
-        print("Smoke test passed. Updater can see the PylaAi-XXZ project folder.")
+        print("Smoke test passed. Updater can see the PylaAi-143 project folder.")
         return 0
 
     if "--list-versions" in sys.argv:
