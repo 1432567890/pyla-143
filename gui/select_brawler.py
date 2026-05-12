@@ -69,6 +69,8 @@ class SelectBrawler:
             'text': COLORS["text"],
             'border': COLORS["border"],
             'danger': COLORS["danger"],
+            'warning': COLORS["warning"],
+            'success': COLORS["success"],
             'gray': COLORS["subtle"],
             'red': COLORS["danger"],
             'darker_white': COLORS["muted"],
