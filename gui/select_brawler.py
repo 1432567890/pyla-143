@@ -29,6 +29,7 @@ from utils import (
 from tkinter import filedialog
 
 from gui.main import install_tk_background_error_filter
+from gui.theme import COLORS, apply_theme, font
 
 orig_screen_width, orig_screen_height = 1920, 1080
 width, height = pyautogui.size()
@@ -41,6 +42,7 @@ pyla_version = load_toml_as_dict("./cfg/general_config.toml")['pyla_version']
 class SelectBrawler:
 
     def __init__(self, data_setter, brawlers):
+        apply_theme()
         self.app = ctk.CTk()
         install_tk_background_error_filter(self.app)
         tk._default_root = self.app
@@ -56,26 +58,26 @@ class SelectBrawler:
         self.app.geometry(f"{str(int(980 * scale_factor))}x{window_height}+{str(int(520 * scale_factor))}")
         self.data_setter = data_setter
         self.colors = {
-            'bg': "#111318",
-            'panel': "#181B23",
-            'card': "#202431",
-            'card_hover': "#283047",
-            'selected': "#3F5CFF",
-            'accent': "#7C5CFF",
-            'accent_2': "#55B6FF",
-            'muted': "#9AA3B2",
-            'text': "#F4F7FB",
-            'border': "#343B4D",
-            'danger': "#C24B5A",
-            'gray': "#7d7777",
-            'red': "#cd5c5c",
-            'darker_white': '#c4c4c4',
-            'dark gray': '#1c1c1c',
-            'cherry red': '#7C5CFF',
-            'ui box gray': '#181B23',
-            'chess white': '#E5E7EB',
-            'chess brown': '#3F5CFF',
-            'indian red': "#cd5c5c"
+            'bg': COLORS["bg"],
+            'panel': COLORS["panel"],
+            'card': COLORS["card"],
+            'card_hover': COLORS["card_hover"],
+            'selected': COLORS["accent_strong"],
+            'accent': COLORS["accent"],
+            'accent_2': COLORS["accent_2"],
+            'muted': COLORS["muted"],
+            'text': COLORS["text"],
+            'border': COLORS["border"],
+            'danger': COLORS["danger"],
+            'gray': COLORS["subtle"],
+            'red': COLORS["danger"],
+            'darker_white': COLORS["muted"],
+            'dark gray': COLORS["surface"],
+            'cherry red': COLORS["accent_strong"],
+            'ui box gray': COLORS["panel"],
+            'chess white': COLORS["text"],
+            'chess brown': COLORS["accent"],
+            'indian red': COLORS["danger"]
         }
 
         self.app.configure(fg_color=self.colors['bg'])
@@ -120,20 +122,20 @@ class SelectBrawler:
         ctk.CTkLabel(
             self.app,
             text="Pyla 143 Brawler Selection",
-            font=("Arial", int(25 * scale_factor), "bold"),
+            font=font(int(25 * scale_factor), "bold"),
             text_color=self.colors["text"],
         ).place(x=int(24 * scale_factor), y=int(16 * scale_factor))
         ctk.CTkLabel(
             self.app,
             text="Pyla 143 is a fork of PylaAI, based on Pyla XXZ.",
-            font=("Arial", int(12 * scale_factor)),
+            font=font(int(12 * scale_factor), "normal"),
             text_color=self.colors["muted"],
         ).place(x=int(25 * scale_factor), y=int(50 * scale_factor))
 
         self.filter_var = tk.StringVar()
         self.filter_entry = ctk.CTkEntry(
             self.app, textvariable=self.filter_var,
-            placeholder_text="Search brawler...", font=("Arial", int(15 * scale_factor)), width=int(270 * scale_factor),
+            placeholder_text="Search brawler...", font=font(int(15 * scale_factor), "semibold"), width=int(270 * scale_factor),
             fg_color=self.colors['panel'], border_color=self.colors['border'], text_color=self.colors["text"]
         )
         self.filter_entry.place(x=int(24 * scale_factor), y=int(scale_factor * 86))
@@ -149,6 +151,7 @@ class SelectBrawler:
             button_color=self.colors["accent"],
             button_hover_color=self.colors["selected"],
             text_color=self.colors["text"],
+            font=font(int(14 * scale_factor), "semibold"),
             width=int(220 * scale_factor),
         ).place(x=int(310 * scale_factor), y=int(86 * scale_factor))
 
@@ -188,15 +191,15 @@ class SelectBrawler:
         self.update_images("")
         ctk.CTkButton(self.app, text="Start", command=self.start_bot, fg_color=self.colors['selected'],
                       hover_color=self.colors["accent"],
-                      text_color="white",
-                      font=("Arial", int(18 * scale_factor), "bold"), border_color=self.colors['accent_2'],
+                      text_color=self.colors["text"],
+                      font=font(int(18 * scale_factor), "bold"), border_color=self.colors['accent_2'],
                       border_width=int(1 * scale_factor), width=int(150 * scale_factor),
                       height=int(42 * scale_factor)).place(x=int(810 * scale_factor), y=int((window_height-60* scale_factor) ))
 
         ctk.CTkButton(self.app, text="Push All", command=self.open_push_all_target_window, fg_color=self.colors['panel'],
                       hover_color=self.colors["card_hover"],
-                      text_color="white",
-                      font=("Arial", int(17 * scale_factor), "bold"), border_color=self.colors['border'],
+                      text_color=self.colors["text"],
+                      font=font(int(17 * scale_factor), "bold"), border_color=self.colors['border'],
                       border_width=int(1 * scale_factor), width=int(150 * scale_factor),
                       height=int(42 * scale_factor)).place(x=int(24 * scale_factor),
                                                                 y=int((window_height-60* scale_factor) ))
@@ -593,7 +596,7 @@ class SelectBrawler:
         ctk.CTkLabel(
             top,
             text="Push all brawlers to:",
-            font=("Comic sans MS", int(22 * scale_factor)),
+            font=font(int(22 * scale_factor), "bold"),
             text_color=self.colors['red'],
         ).pack(pady=(int(18 * scale_factor), int(10 * scale_factor)))
 
@@ -617,8 +620,8 @@ class SelectBrawler:
                 command=lambda t=target: choose_target(t),
                 fg_color=self.colors['ui box gray'],
                 hover_color=self.colors['cherry red'],
-                text_color="white",
-                font=("Comic sans MS", int(20 * scale_factor)),
+                text_color=self.colors["text"],
+                font=font(int(20 * scale_factor), "bold"),
                 border_color=self.colors['cherry red'],
                 border_width=int(2 * scale_factor),
                 width=int(120 * scale_factor),
@@ -750,7 +753,7 @@ class SelectBrawler:
         entry_width = int(170 * scale_factor)
 
         # --- Title ---
-        ctk.CTkLabel(top, text=f"Brawler: {brawler}", font=("Comic sans MS", int(20 * scale_factor)),
+        ctk.CTkLabel(top, text=f"Brawler: {brawler}", font=font(int(20 * scale_factor), "bold"),
                      text_color=self.colors['red']).place(x=x_center_label, y=y_title)
 
         # --- Push type buttons ---
@@ -759,41 +762,41 @@ class SelectBrawler:
         farm_type_button_frame.place(x=int(45 * scale_factor), y=y_buttons)
 
         # --- Entry widgets (created but NOT placed yet) ---
-        push_until_label = ctk.CTkLabel(top, text="Target Amount", font=("Comic sans MS", int(15 * scale_factor)),
+        push_until_label = ctk.CTkLabel(top, text="Target Amount", font=font(int(15 * scale_factor), "bold"),
                      text_color=self.colors['chess white'])
         push_until_entry = ctk.CTkEntry(
-            top, textvariable=push_until_var, fg_color=self.colors['ui box gray'], text_color="white",
+            top, textvariable=push_until_var, fg_color=self.colors['ui box gray'], text_color=self.colors["text"],
             border_color=self.colors['cherry red'], border_width=int(2 * scale_factor),
             height=int(28 * scale_factor), width=entry_width
         )
 
-        trophies_label = ctk.CTkLabel(top, text="Current Trophies", font=("Comic sans MS", int(15 * scale_factor)),
+        trophies_label = ctk.CTkLabel(top, text="Current Trophies", font=font(int(15 * scale_factor), "bold"),
                      text_color=self.colors['chess white'])
         trophies_entry = ctk.CTkEntry(
-            top, textvariable=trophies_var, fg_color=self.colors['ui box gray'], text_color="white",
+            top, textvariable=trophies_var, fg_color=self.colors['ui box gray'], text_color=self.colors["text"],
             border_color=self.colors['cherry red'], border_width=int(2 * scale_factor),
             height=int(28 * scale_factor), width=entry_width
         )
 
-        wins_label = ctk.CTkLabel(top, text="Current Wins", font=("Comic sans MS", int(15 * scale_factor)),
+        wins_label = ctk.CTkLabel(top, text="Current Wins", font=font(int(15 * scale_factor), "bold"),
                      text_color=self.colors['chess white'])
         wins_entry = ctk.CTkEntry(
-            top, textvariable=wins_var, fg_color=self.colors['ui box gray'], text_color="white",
+            top, textvariable=wins_var, fg_color=self.colors['ui box gray'], text_color=self.colors["text"],
             border_color=self.colors['cherry red'], border_width=int(2 * scale_factor),
             height=int(28 * scale_factor), width=entry_width
         )
 
-        win_streak_label = ctk.CTkLabel(top, text="Current Brawler's Win Streak", font=("Comic sans MS", int(15 * scale_factor)),
+        win_streak_label = ctk.CTkLabel(top, text="Current Brawler's Win Streak", font=font(int(15 * scale_factor), "bold"),
                      text_color=self.colors['chess white'])
         current_win_streak_entry = ctk.CTkEntry(
-            top, textvariable=current_win_streak_var, fg_color=self.colors['ui box gray'], text_color="white",
+            top, textvariable=current_win_streak_var, fg_color=self.colors['ui box gray'], text_color=self.colors["text"],
             border_color=self.colors['cherry red'], border_width=int(2 * scale_factor),
             height=int(28 * scale_factor), width=entry_width
         )
 
         auto_pick_checkbox = ctk.CTkCheckBox(
             top, text="Bot auto-selects brawler", variable=auto_pick_var,
-            fg_color=self.colors['cherry red'], text_color="white", checkbox_height=int(24 * scale_factor)
+            fg_color=self.colors['cherry red'], text_color=self.colors["text"], checkbox_height=int(24 * scale_factor)
         )
 
         def submit_data():
@@ -826,7 +829,7 @@ class SelectBrawler:
         submit_button = ctk.CTkButton(
             top, text="Submit", command=submit_data, fg_color=self.colors['ui box gray'],
             border_color=self.colors['cherry red'],
-            text_color="white", border_width=int(2 * scale_factor), width=int(80 * scale_factor)
+            text_color=self.colors["text"], border_width=int(2 * scale_factor), width=int(80 * scale_factor)
         )
 
         # --- All dynamic widgets that can be shown/hidden ---
@@ -899,7 +902,7 @@ class SelectBrawler:
         self.wins_button = ctk.CTkButton(farm_type_button_frame, text="Win Amount", width=int(90 * scale_factor),
                                             command=show_wins_fields,
                                             hover_color=self.colors['cherry red'],
-                                            font=("", int(15 * scale_factor)),
+                                            font=font(int(15 * scale_factor), "semibold"),
                                             fg_color=self.colors["ui box gray"],
                                             border_color=self.colors['cherry red'],
                                             border_width=int(2 * scale_factor)
@@ -907,7 +910,7 @@ class SelectBrawler:
         self.trophies_button = ctk.CTkButton(farm_type_button_frame, text="Trophies", width=int(85 * scale_factor),
                                              command=show_trophies_fields,
                                              hover_color=self.colors['cherry red'],
-                                             font=("", int(15 * scale_factor)),
+                                             font=font(int(15 * scale_factor), "semibold"),
                                              fg_color=self.colors["ui box gray"],
                                              border_color=self.colors['cherry red'], border_width=int(2 * scale_factor)
                                              )
@@ -990,22 +993,22 @@ class SelectBrawler:
                 ctk.CTkLabel(
                     card,
                     text=brawler.title(),
-                    font=("Arial", int(15 * scale_factor), "bold"),
+                    font=font(int(15 * scale_factor), "bold"),
                     text_color=self.colors["text"],
                     anchor="w",
                 ).place(x=int(86 * scale_factor), y=int(13 * scale_factor))
                 ctk.CTkLabel(
                     card,
                     text=trophies_text,
-                    font=("Arial", int(12 * scale_factor)),
-                    text_color="#E8ECF7" if card_data.selected else self.colors["muted"],
+                    font=font(int(12 * scale_factor)),
+                    text_color=COLORS["text"] if card_data.selected else self.colors["muted"],
                     anchor="w",
                 ).place(x=int(86 * scale_factor), y=int(40 * scale_factor))
                 ctk.CTkLabel(
                     card,
                     text=badge_text,
-                    font=("Arial", int(11 * scale_factor), "bold"),
-                    text_color="#FFFFFF" if card_data.selected else self.colors["accent_2"],
+                    font=font(int(11 * scale_factor), "bold"),
+                    text_color=self.colors["text"] if card_data.selected else self.colors["accent_2"],
                     anchor="w",
                 ).place(x=int(86 * scale_factor), y=int(63 * scale_factor))
                 self.visible_image_labels.append(card)

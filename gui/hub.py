@@ -12,6 +12,7 @@ from utils import load_toml_as_dict, save_dict_as_toml, get_discord_link, get_dp
 from packaging import version
 from performance_profile import apply_performance_profile
 from discord_notifier import async_send_test_notification
+from gui.theme import COLORS, apply_theme, font
 
 orig_screen_width, orig_screen_height = 1920, 1080
 width, height = pyautogui.size()
@@ -155,7 +156,7 @@ class Hub:
         # -----------------------------------------------------------------------------------------
         # Appearance
         # -----------------------------------------------------------------------------------------
-        ctk.set_appearance_mode("dark")
+        apply_theme()
 
         # For showing tooltips in Toplevel windows
         # For showing tooltips
@@ -171,6 +172,7 @@ class Hub:
         self.app.title(f"Pyla 143 Hub – {self.version_str}")
         self.app.geometry(f"{S(1000)}x{S(750)}")
         self.app.resizable(False, False)
+        self.app.configure(fg_color=COLORS["bg"])
 
         # Hide tooltip on "global" interactions (tab switch, clicks, scroll, key press, focus loss, etc.)
         for seq in ("<ButtonPress>", "<MouseWheel>", "<KeyPress>", "<FocusOut>"):
@@ -184,7 +186,14 @@ class Hub:
             self.app,
             width=S(980),
             height=S(730),
-            corner_radius=S(10)
+            corner_radius=S(10),
+            fg_color=COLORS["surface"],
+            segmented_button_fg_color=COLORS["panel"],
+            segmented_button_selected_color=COLORS["accent_strong"],
+            segmented_button_selected_hover_color=COLORS["accent"],
+            segmented_button_unselected_color=COLORS["panel_alt"],
+            segmented_button_unselected_hover_color=COLORS["card_hover"],
+            text_color=COLORS["text"],
         )
         self.tabview.pack(pady=S(10), padx=S(10), fill="x", expand=False)
 
@@ -192,13 +201,13 @@ class Hub:
         self.tabview._segmented_button.configure(
             corner_radius=S(10),
             border_width=2,
-            fg_color="#4A4A4A",
-            selected_color="#AA2A2A",
-            selected_hover_color="#BB3A3A",
-            unselected_color="#333333",
-            unselected_hover_color="#555555",
-            text_color="#FFFFFF",
-            font=("Arial", S(16), "bold"),
+            fg_color=COLORS["panel"],
+            selected_color=COLORS["accent_strong"],
+            selected_hover_color=COLORS["accent"],
+            unselected_color=COLORS["panel_alt"],
+            unselected_hover_color=COLORS["card_hover"],
+            text_color=COLORS["text"],
+            font=font(S(16), "bold"),
             height=S(40)
         )
 
@@ -290,10 +299,10 @@ class Hub:
                 label = ctk.CTkLabel(
                     self.tooltip_window,
                     text=self._tooltip_text,
-                    fg_color="#333333",
-                    text_color="#FFFFFF",
+                    fg_color=COLORS["panel_alt"],
+                    text_color=COLORS["text"],
                     corner_radius=S(6),
-                    font=("Arial", S(12))
+                    font=font(S(12))
                 )
                 label.pack(padx=S(6), pady=S(4))
 
@@ -338,8 +347,8 @@ class Hub:
             warn_label = ctk.CTkLabel(
                 container,
                 text=warn_text,
-                text_color="#e74c3c",
-                font=("Arial", S(16), "bold")
+                text_color=COLORS["danger"],
+                font=font(S(18), "bold")
             )
             warn_label.grid(row=row_, column=0, columnspan=2, pady=S(10))
             row_ += 1
@@ -355,7 +364,7 @@ class Hub:
         label_type = ctk.CTkLabel(
             orientation_frame,
             text="Map Orientation:",
-            font=("Arial", S(20), "bold")
+            font=font(S(20), "bold")
         )
         label_type.pack(side="left", padx=S(15))
 
@@ -368,7 +377,7 @@ class Hub:
             orientation_frame,
             text="Vertical",
             command=lambda: set_gamemode_type(3),
-            font=("Arial", S(16), "bold"),
+            font=font(S(16), "bold"),
             corner_radius=S(6),
             width=S(120),
             height=S(40)
@@ -379,7 +388,7 @@ class Hub:
             orientation_frame,
             text="Horizontal",
             command=lambda: set_gamemode_type(5),
-            font=("Arial", S(16), "bold"),
+            font=font(S(16), "bold"),
             corner_radius=S(6),
             width=S(120),
             height=S(40)
@@ -391,7 +400,7 @@ class Hub:
         # -----------------------------------------------------------------
         # 3) Gamemode Selection as rectangular buttons
         # -----------------------------------------------------------------
-        gm_label = ctk.CTkLabel(container, text="Select Gamemode:", font=("Arial", S(20), "bold"))
+        gm_label = ctk.CTkLabel(container, text="Select Gamemode:", font=font(S(20), "bold"))
         gm_label.grid(row=row_, column=0, columnspan=2, pady=S(10))
         row_ += 1
 
@@ -425,7 +434,7 @@ class Hub:
                 corner_radius=S(6),
                 width=S(150),
                 height=S(40),
-                font=("Arial", S(16), "bold"),
+                font=font(S(16), "bold"),
                 state=("disabled" if disabled else "normal")
             )
             return btn
@@ -462,9 +471,9 @@ class Hub:
 
             def set_button_color(btn, val):
                 if val == gm_now:
-                    btn.configure(fg_color="#AA2A2A", hover_color="#BB3A3A")
+                    btn.configure(fg_color=COLORS["accent_strong"], hover_color=COLORS["accent"])
                 else:
-                    btn.configure(fg_color="#333333", hover_color="#BB3A3A")
+                    btn.configure(fg_color=COLORS["panel_alt"], hover_color=COLORS["accent"])
 
             # For vertical set
             set_button_color(self.rb_brawlball_3, "brawlball")
@@ -479,11 +488,11 @@ class Hub:
             """Refresh the orientation buttons' color based on self.gamemode_type_var."""
             t = self.gamemode_type_var.get()
             if t == 3:
-                self.btn_type_vertical.configure(fg_color="#AA2A2A", hover_color="#BB3A3A")
-                self.btn_type_horizontal.configure(fg_color="#333333", hover_color="#BB3A3A")
+                self.btn_type_vertical.configure(fg_color=COLORS["accent_strong"], hover_color=COLORS["accent"])
+                self.btn_type_horizontal.configure(fg_color=COLORS["panel_alt"], hover_color=COLORS["accent"])
             else:
-                self.btn_type_vertical.configure(fg_color="#333333", hover_color="#BB3A3A")
-                self.btn_type_horizontal.configure(fg_color="#AA2A2A", hover_color="#BB3A3A")
+                self.btn_type_vertical.configure(fg_color=COLORS["panel_alt"], hover_color=COLORS["accent"])
+                self.btn_type_horizontal.configure(fg_color=COLORS["accent_strong"], hover_color=COLORS["accent"])
 
         self._refresh_orientation_buttons = refresh_orientation_buttons
 
@@ -510,7 +519,7 @@ class Hub:
         # -----------------------------------------------------------------
         # 4) Emulator Selection
         # -----------------------------------------------------------------
-        emulator_label = ctk.CTkLabel(container, text="Select Emulator:", font=("Arial", S(20), "bold"))
+        emulator_label = ctk.CTkLabel(container, text="Select Emulator:", font=font(S(20), "bold"))
         emulator_label.grid(row=row_, column=0, columnspan=2, pady=S(10))
         row_ += 1
 
@@ -568,7 +577,7 @@ class Hub:
                 corner_radius=S(6),
                 width=S(150),
                 height=S(40),
-                font=("Arial", S(16), "bold")
+                font=font(S(16), "bold")
             )
             return btn
 
@@ -583,9 +592,9 @@ class Hub:
 
             def color(btn, val):
                 if val == curr_emu:
-                    btn.configure(fg_color="#AA2A2A", hover_color="#BB3A3A")
+                    btn.configure(fg_color=COLORS["accent_strong"], hover_color=COLORS["accent"])
                 else:
-                    btn.configure(fg_color="#333333", hover_color="#BB3A3A")
+                    btn.configure(fg_color=COLORS["panel_alt"], hover_color=COLORS["accent"])
 
             color(self.btn_ldplayer, "LDPlayer")
             color(self.btn_mumu, "MuMu")
@@ -603,9 +612,9 @@ class Hub:
         start_button = ctk.CTkButton(
             container,
             text="Next",
-            fg_color="#c0392b",
-            hover_color="#e74c3c",
-            font=("Arial", S(24), "bold"),
+            fg_color=COLORS["accent_strong"],
+            hover_color=COLORS["accent"],
+            font=font(S(24), "bold"),
             command=self._on_start,
             width=S(220),
             height=S(60)
@@ -622,8 +631,8 @@ class Hub:
         disclaim_label = ctk.CTkLabel(
             disclaim_frame,
             text="Pyla is free, public and open-source. Join the Discord -> ",
-            font=("Arial", S(18), "bold"),
-            text_color="#FFFFFF"
+            font=font(S(18), "bold"),
+            text_color=COLORS["text"]
         )
         disclaim_label.pack(side="left")
 
@@ -635,8 +644,8 @@ class Hub:
         link_label = ctk.CTkLabel(
             disclaim_frame,
             text=discord_link,
-            font=("Arial", S(18), "bold"),
-            text_color="#3498db",
+            font=font(S(18), "bold"),
+            text_color=COLORS["link"],
             cursor="hand2"
         )
         link_label.pack(side="left")
@@ -650,8 +659,8 @@ class Hub:
         ad_label = ctk.CTkLabel(
             ad_frame,
             text="Support Pyla and get Early Access to updates by becoming a Patreon supporter -> ",
-            font=("Arial", S(18), "bold"),
-            text_color="#FFFFFF"
+            font=font(S(18), "bold"),
+            text_color=COLORS["text"]
         )
         ad_label.pack(side="left")
 
@@ -662,8 +671,8 @@ class Hub:
         patreon_label = ctk.CTkLabel(
             ad_frame,
             text=shown_patreon_link,
-            font=("Arial", S(18), "bold"),
-            text_color="#3498db",
+            font=font(S(18), "bold"),
+            text_color=COLORS["link"],
             cursor="hand2"
         )
         patreon_label.pack(side="left")
@@ -678,8 +687,8 @@ class Hub:
         version_label = ctk.CTkLabel(
             frame,
             text="Pyla 143",
-            font=("Arial", S(14), "bold"),
-            text_color="#888888"
+            font=font(S(14), "bold"),
+            text_color=COLORS["subtle"]
         )
         version_label.place(relx=1.0, rely=1.0, anchor="se", x=-S(10), y=-S(10))
 
@@ -706,7 +715,7 @@ class Hub:
                                  use_general_config=False,
                                  tooltip_text=None):
             nonlocal row_idx
-            lbl = ctk.CTkLabel(container, text=label_text, font=("Arial", S(18)))
+            lbl = ctk.CTkLabel(container, text=label_text, font=font(S(18)))
             lbl.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
 
             # Decide which dictionary to read/write
@@ -732,7 +741,7 @@ class Hub:
                     var_str.set(str(current_config[config_key]))
 
             entry = ctk.CTkEntry(
-                container, textvariable=var_str, width=S(120), font=("Arial", S(16))
+                container, textvariable=var_str, width=S(120), font=font(S(16))
             )
             entry.grid(row=row_idx, column=1, sticky="w", padx=S(20), pady=S(10))
             entry.bind("<FocusOut>", on_save)
@@ -790,7 +799,7 @@ class Hub:
         )
 
         # 4) CPU/GPU (store in general_config)
-        lbl_gpu = ctk.CTkLabel(container, text="Inference device:", font=("Arial", S(18)))
+        lbl_gpu = ctk.CTkLabel(container, text="Inference device:", font=font(S(18)))
         lbl_gpu.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
 
         gpu_values = ["auto", "directml", "cuda", "openvino", "cpu"]
@@ -805,10 +814,10 @@ class Hub:
             values=gpu_values,
             command=on_gpu_change,
             variable=gpu_var,
-            font=("Arial", S(16)),
-            fg_color="#AA2A2A",
-            button_color="#AA2A2A",
-            button_hover_color="#BB3A3A",
+            font=font(S(16)),
+            fg_color=COLORS["accent_strong"],
+            button_color=COLORS["accent_strong"],
+            button_hover_color=COLORS["accent"],
             width=S(100),
             height=S(35)
         )
@@ -823,7 +832,7 @@ class Hub:
             tooltip_text="DirectML adapter index. Keep auto unless DirectML uses the wrong GPU; try 0 or 1 on laptops with two GPUs."
         )
 
-        lbl_long_press = ctk.CTkLabel(container, text="Longpress star_drop:", font=("Arial", S(18)))
+        lbl_long_press = ctk.CTkLabel(container, text="Longpress star_drop:", font=font(S(18)))
         lbl_long_press.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
         long_press_var = tk.BooleanVar(
             value=(str(self.general_config["long_press_star_drop"]).lower() in ["yes", "true"])
@@ -838,15 +847,15 @@ class Hub:
             text="",
             variable=long_press_var,
             command=toggle_long_press_detection,
-            fg_color="#AA2A2A",
-            hover_color="#BB3A3A",
+            fg_color=COLORS["accent_strong"],
+            hover_color=COLORS["accent"],
             width=S(30),
             height=S(30)
         )
         long_press_cb.grid(row=row_idx, column=1, sticky="w", padx=S(20), pady=S(10))
         row_idx += 1
 
-        lbl_post_match = ctk.CTkLabel(container, text="After Round:", font=("Arial", S(18)))
+        lbl_post_match = ctk.CTkLabel(container, text="After Round:", font=font(S(18)))
         lbl_post_match.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
         post_match_labels = {
             "lobby": "Return to lobby",
@@ -869,10 +878,10 @@ class Hub:
             values=list(post_match_labels.values()),
             command=on_post_match_change,
             variable=post_match_var,
-            font=("Arial", S(16)),
-            fg_color="#AA2A2A",
-            button_color="#AA2A2A",
-            button_hover_color="#BB3A3A",
+            font=font(S(16)),
+            fg_color=COLORS["accent_strong"],
+            button_color=COLORS["accent_strong"],
+            button_hover_color=COLORS["accent"],
             width=S(170),
             height=S(35)
         )
@@ -883,7 +892,7 @@ class Hub:
         )
         row_idx += 1
 
-        lbl_term_log = ctk.CTkLabel(container, text="Terminal Logging:", font=("Arial", S(18)))
+        lbl_term_log = ctk.CTkLabel(container, text="Terminal Logging:", font=font(S(18)))
         lbl_term_log.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
         term_log_var = tk.BooleanVar(
             value=(str(self.general_config["terminal_logging"]).lower() in ["yes", "true"])
@@ -898,8 +907,8 @@ class Hub:
             text="",
             variable=term_log_var,
             command=toggle_terminal_logging,
-            fg_color="#AA2A2A",
-            hover_color="#BB3A3A",
+            fg_color=COLORS["accent_strong"],
+            hover_color=COLORS["accent"],
             width=S(30),
             height=S(30)
         )
@@ -910,7 +919,7 @@ class Hub:
         )
         row_idx += 1
 
-        lbl_debug_screen = ctk.CTkLabel(container, text="Debug Screen:", font=("Arial", S(18)))
+        lbl_debug_screen = ctk.CTkLabel(container, text="Debug Screen:", font=font(S(18)))
         lbl_debug_screen.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
         debug_screen_var = tk.BooleanVar(
             value=(str(self.general_config["visual_debug"]).lower() in ["yes", "true"])
@@ -925,8 +934,8 @@ class Hub:
             text="",
             variable=debug_screen_var,
             command=toggle_debug_screen,
-            fg_color="#AA2A2A",
-            hover_color="#BB3A3A",
+            fg_color=COLORS["accent_strong"],
+            hover_color=COLORS["accent"],
             width=S(30),
             height=S(30)
         )
@@ -937,7 +946,7 @@ class Hub:
         )
         row_idx += 1
 
-        lbl_showdown_style = ctk.CTkLabel(container, text="Trio Movement Style:", font=("Arial", S(18)))
+        lbl_showdown_style = ctk.CTkLabel(container, text="Trio Movement Style:", font=font(S(18)))
         lbl_showdown_style.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
         style_labels = {
             "hide": "Hide / avoid enemies",
@@ -960,10 +969,10 @@ class Hub:
             values=list(style_labels.values()),
             command=on_showdown_style_change,
             variable=style_var,
-            font=("Arial", S(16)),
-            fg_color="#AA2A2A",
-            button_color="#AA2A2A",
-            button_hover_color="#BB3A3A",
+            font=font(S(16)),
+            fg_color=COLORS["accent_strong"],
+            button_color=COLORS["accent_strong"],
+            button_hover_color=COLORS["accent"],
             width=S(190),
             height=S(35)
         )
@@ -974,7 +983,7 @@ class Hub:
         )
         row_idx += 1
 
-        lbl_capture_vision = ctk.CTkLabel(container, text="Capture Vision Frames:", font=("Arial", S(18)))
+        lbl_capture_vision = ctk.CTkLabel(container, text="Capture Vision Frames:", font=font(S(18)))
         lbl_capture_vision.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
         capture_vision_var = tk.BooleanVar(
             value=(str(self.general_config["capture_bad_vision_frames"]).lower() in ["yes", "true"])
@@ -989,8 +998,8 @@ class Hub:
             text="",
             variable=capture_vision_var,
             command=toggle_capture_vision,
-            fg_color="#AA2A2A",
-            hover_color="#BB3A3A",
+            fg_color=COLORS["accent_strong"],
+            hover_color=COLORS["accent"],
             width=S(30),
             height=S(30)
         )
@@ -1077,24 +1086,24 @@ class Hub:
             tooltip_text="CPU threads used by the detection models. Lower values reduce CPU usage."
         )
 
-        lbl_profile = ctk.CTkLabel(container, text="Performance Profile:", font=("Arial", S(18)))
+        lbl_profile = ctk.CTkLabel(container, text="Performance Profile:", font=font(S(18)))
         lbl_profile.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
         profile_var = tk.StringVar(value="balanced")
         profile_menu = ctk.CTkOptionMenu(
             container,
             values=["balanced", "low-end", "quality"],
             variable=profile_var,
-            font=("Arial", S(16)),
-            fg_color="#AA2A2A",
-            button_color="#AA2A2A",
-            button_hover_color="#BB3A3A",
+            font=font(S(16)),
+            fg_color=COLORS["accent_strong"],
+            button_color=COLORS["accent_strong"],
+            button_hover_color=COLORS["accent"],
             width=S(120),
             height=S(35)
         )
         profile_menu.grid(row=row_idx, column=1, padx=S(20), pady=S(10), sticky="w")
         row_idx += 1
 
-        profile_status = ctk.CTkLabel(container, text="", font=("Arial", S(14)), text_color="#AAAAAA")
+        profile_status = ctk.CTkLabel(container, text="", font=font(S(14)), text_color=COLORS["muted"])
         profile_status.grid(row=row_idx, column=0, columnspan=2, sticky="n", padx=S(20), pady=(0, S(4)))
         row_idx += 1
 
@@ -1123,18 +1132,18 @@ class Hub:
                 refresh_profile_fields(result)
                 profile_status.configure(
                     text=f"Applied {result['profile']} profile. Restart the bot to use it.",
-                    text_color="#2ECC71"
+                    text_color=COLORS["success"]
                 )
             except Exception as exc:
-                profile_status.configure(text=f"Could not apply profile: {exc}", text_color="#E74C3C")
+                profile_status.configure(text=f"Could not apply profile: {exc}", text_color=COLORS["danger"])
 
         apply_profile_btn = ctk.CTkButton(
             container,
             text="Apply Performance Mode",
             command=on_apply_performance_profile,
-            fg_color="#AA2A2A",
-            hover_color="#BB3A3A",
-            font=("Arial", S(16), "bold"),
+            fg_color=COLORS["accent_strong"],
+            hover_color=COLORS["accent"],
+            font=font(S(16), "bold"),
             corner_radius=S(6),
             width=S(220),
             height=S(40)
@@ -1160,7 +1169,7 @@ class Hub:
 
         def create_webhook_entry(label_text, config_key, convert_func=str, width=360, show=None):
             nonlocal row_idx
-            lbl = ctk.CTkLabel(container, text=label_text, font=("Arial", S(18)))
+            lbl = ctk.CTkLabel(container, text=label_text, font=font(S(18)))
             lbl.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
             var_str = tk.StringVar(value=str(self.webhook_config.get(config_key, "")))
 
@@ -1172,7 +1181,7 @@ class Hub:
                 except ValueError:
                     var_str.set(str(self.webhook_config.get(config_key, "")))
 
-            entry = ctk.CTkEntry(container, textvariable=var_str, width=S(width), font=("Arial", S(16)), show=show)
+            entry = ctk.CTkEntry(container, textvariable=var_str, width=S(width), font=font(S(16)), show=show)
             entry.grid(row=row_idx, column=1, sticky="w", padx=S(20), pady=S(10))
             entry.bind("<FocusOut>", on_save)
             entry.bind("<Return>", on_save)
@@ -1180,7 +1189,7 @@ class Hub:
 
         def create_webhook_toggle(label_text, config_key):
             nonlocal row_idx
-            lbl = ctk.CTkLabel(container, text=label_text, font=("Arial", S(18)))
+            lbl = ctk.CTkLabel(container, text=label_text, font=font(S(18)))
             lbl.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
             var_bool = tk.BooleanVar(value=bool(self.webhook_config.get(config_key, False)))
 
@@ -1193,8 +1202,8 @@ class Hub:
                 text="",
                 variable=var_bool,
                 command=on_toggle,
-                fg_color="#AA2A2A",
-                hover_color="#BB3A3A",
+                fg_color=COLORS["accent_strong"],
+                hover_color=COLORS["accent"],
                 width=S(30),
                 height=S(30),
             )
@@ -1216,21 +1225,21 @@ class Hub:
         create_webhook_entry("Allowed Channel ID:", "discord_control_channel_id", str, width=220)
         create_webhook_entry("Guild ID:", "discord_control_guild_id", str, width=220)
 
-        webhook_status = ctk.CTkLabel(container, text="", font=("Arial", S(14)), text_color="#AAAAAA")
+        webhook_status = ctk.CTkLabel(container, text="", font=font(S(14)), text_color=COLORS["muted"])
         webhook_status.grid(row=row_idx, column=0, columnspan=2, sticky="n", padx=S(20), pady=(S(6), 0))
         row_idx += 1
 
         def send_test_webhook():
-            webhook_status.configure(text="Sending Discord test...", text_color="#AAAAAA")
+            webhook_status.configure(text="Sending Discord test...", text_color=COLORS["muted"])
 
             def worker():
                 try:
                     ok = asyncio.run(async_send_test_notification())
                     message = "Discord test sent." if ok else "Discord test failed. Check URL and Discord permissions."
-                    color = "#2ECC71" if ok else "#E74C3C"
+                    color = COLORS["success"] if ok else COLORS["danger"]
                 except Exception as exc:
                     message = f"Discord test failed: {exc}"
-                    color = "#E74C3C"
+                    color = COLORS["danger"]
                 try:
                     self.app.after(0, lambda: webhook_status.configure(text=message, text_color=color))
                 except Exception:
@@ -1242,9 +1251,9 @@ class Hub:
             container,
             text="Send Discord Test",
             command=send_test_webhook,
-            fg_color="#AA2A2A",
-            hover_color="#BB3A3A",
-            font=("Arial", S(16), "bold"),
+            fg_color=COLORS["accent_strong"],
+            hover_color=COLORS["accent"],
+            font=font(S(16), "bold"),
             corner_radius=S(6),
             width=S(220),
             height=S(40)
@@ -1273,7 +1282,7 @@ class Hub:
         def create_timer_setting(param_name, label_text, tooltip_text=None, disabled=False):
             nonlocal row_idx
 
-            lbl = ctk.CTkLabel(container, text=label_text, font=("Arial", S(18)))
+            lbl = ctk.CTkLabel(container, text=label_text, font=font(S(18)))
             lbl.grid(row=row_idx, column=0, padx=S(20), pady=S(10), sticky="e")
 
             # Frame to hold slider & entry side by side
@@ -1299,7 +1308,7 @@ class Hub:
                 slider_entry_frame,
                 textvariable=val_var,
                 width=S(80),
-                font=("Arial", S(16)),
+                font=font(S(16)),
                 state=("disabled" if disabled else "normal")
             )
             entry.pack(side="left", padx=S(10))
@@ -1436,7 +1445,7 @@ class Hub:
             text_label = ctk.CTkLabel(
                 cell_frame,
                 text=f"{brawler}\n{total_games} games",
-                font=("Arial", S(16), "bold")
+                font=font(S(16), "bold")
             )
             text_label.pack()
 
@@ -1444,15 +1453,15 @@ class Hub:
             stats_frame.pack(pady=S(5))
 
             # Win in green
-            color_win = "#2ecc71"
+            color_win = COLORS["success"]
 
             # Loss in red
-            color_loss = "#e74c3c"
+            color_loss = COLORS["danger"]
 
             lbl_win = ctk.CTkLabel(
                 stats_frame,
                 text=f"{wr}%",
-                font=("Arial", S(14), "bold"),
+                font=font(S(14), "bold"),
                 text_color=color_win
             )
             lbl_win.pack(side="left", padx=S(5))
@@ -1460,7 +1469,7 @@ class Hub:
             lbl_loss = ctk.CTkLabel(
                 stats_frame,
                 text=f"{lr}%",
-                font=("Arial", S(14), "bold"),
+                font=font(S(14), "bold"),
                 text_color=color_loss
             )
             lbl_loss.pack(side="left", padx=S(5))
