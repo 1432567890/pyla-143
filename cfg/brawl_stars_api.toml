@@ -3,6 +3,11 @@
 
 player_tag = "#YOURTAG"
 timeout_seconds = 15
+enabled = true
+confirm_goal_reached = true
+poll_interval_sec = 60
+retry_backoff_sec = 30
+timeout_sec = 10
 
 # Auto-refresh mode for changing public IPs.
 # When enabled, Pyla 143 logs in to the official developer portal, gets your current public IP,

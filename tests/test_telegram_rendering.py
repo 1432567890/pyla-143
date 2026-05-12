@@ -11,6 +11,12 @@ class TelegramRenderingTests(unittest.TestCase):
         self.assertIn("<b>Heartbeat</b>", text)
         self.assertIn("Brawler: nita", text)
 
+    def test_html_message_escapes_values(self):
+        text = telegram_notifier._format_message("heartbeat", {"brawler": "<bad&name>"})
+
+        self.assertIn("&lt;bad&amp;name&gt;", text)
+        self.assertNotIn("Brawler: <bad&name>", text)
+
     def test_admin_ids_are_required_for_control(self):
         self.assertTrue(is_admin({"admin_ids": ["123"]}, 123))
         self.assertFalse(is_admin({"admin_ids": []}, 123))

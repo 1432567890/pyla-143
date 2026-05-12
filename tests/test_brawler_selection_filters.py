@@ -1,6 +1,6 @@
 import unittest
 
-from brawler_selection import build_brawler_cards, filter_brawler_cards
+from brawler_selection import build_brawler_cards, filter_brawler_cards, trophy_sort_available
 
 
 class BrawlerSelectionFilterTests(unittest.TestCase):
@@ -24,6 +24,11 @@ class BrawlerSelectionFilterTests(unittest.TestCase):
         filtered = filter_brawler_cards(cards, needs_push_only=True, target_trophies=1000)
 
         self.assertEqual([card.name for card in filtered], ["shelly"])
+
+    def test_trophy_sort_availability_requires_loaded_trophy_data(self):
+        self.assertFalse(trophy_sort_available({}))
+        self.assertFalse(trophy_sort_available({"shelly": None}))
+        self.assertTrue(trophy_sort_available({"shelly": 200}))
 
 
 if __name__ == "__main__":

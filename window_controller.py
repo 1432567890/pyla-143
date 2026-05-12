@@ -476,10 +476,19 @@ class WindowController:
         self.joystick_angle_deadzone = float(bot_config.get("joystick_angle_deadzone", 4.0))
         self.joystick_micro_steps = max(0, min(3, int(bot_config.get("joystick_micro_steps", 2))))
         self.joystick_debug = str(bot_config.get("joystick_debug", "no")).lower() in ("yes", "true", "1")
+        self.enable_parallel_movement_attack = _config_bool(bot_config.get("enable_parallel_movement_attack", True), True)
+        self.joystick_keepalive_enabled = _config_bool(bot_config.get("joystick_keepalive_enabled", True), True)
+        self.joystick_keepalive_interval = float(bot_config.get("joystick_keepalive_interval", 0.75))
+        self.movement_stall_warning_seconds = float(bot_config.get("movement_stall_warning_seconds", 0.35))
         self.last_joystick_angle = None
         self.last_joystick_update_time = 0.0
+        self.last_joystick_command_time = 0.0
+        self.last_joystick_keepalive_time = 0.0
+        self.last_joystick_release_reason = None
+        self._last_movement_stall_warning = 0.0
         self.PID_JOYSTICK = 1  # ID for WASD movement
         self.PID_ATTACK = 2  # ID for clicks/attacks
+        self.input_backend_supports_parallel_drag = True
         self.check_if_brawl_stars_crashed_timer = load_toml_as_dict("cfg/time_tresholds.toml")["check_if_brawl_stars_crashed"]
         self.time_since_checked_if_brawl_stars_crashed = time.time()
         self.foreground_check_failures = 0
@@ -1193,6 +1202,12 @@ class WindowController:
                     and diff < self.joystick_angle_deadzone
                     and now - self.last_joystick_update_time < self.joystick_update_min_interval
             ):
+                if self.joystick_debug:
+                    age_ms = int((now - self.last_joystick_command_time) * 1000) if self.last_joystick_command_time else 0
+                    print(
+                        "[MOVE] movement_update_skipped_reason=angle_deadzone "
+                        f"active_movement_intent=True last_movement_command_age_ms={age_ms}"
+                    )
                 return
 
         angle_rad = math.radians(angle_degrees)
@@ -1200,14 +1215,23 @@ class WindowController:
         target_x = self.joystick_x + math.cos(angle_rad) * scaled_radius
         target_y = self.joystick_y + math.sin(angle_rad) * scaled_radius
 
-        joystick_needs_refresh = now - self.last_joystick_down_time > 2.0
-        if self.are_we_moving and joystick_needs_refresh:
-            self.stop_joystick()
+        if (
+                self.are_we_moving
+                and self.joystick_keepalive_enabled
+                and now - self.last_joystick_keepalive_time >= self.joystick_keepalive_interval
+                and self.last_joystick_pos != (None, None)
+        ):
+            self.touch_move(self.last_joystick_pos[0], self.last_joystick_pos[1], pointer_id=self.PID_JOYSTICK)
+            self.last_joystick_keepalive_time = now
+            if self.joystick_debug:
+                age_ms = int((now - self.last_joystick_command_time) * 1000) if self.last_joystick_command_time else 0
+                print(f"[MOVE] joystick_keepalive active_movement_intent=True last_movement_command_age_ms={age_ms}")
 
         if not self.are_we_moving:
             self.touch_down(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
             self.are_we_moving = True
             self.last_joystick_down_time = now
+            self.last_joystick_keepalive_time = now
             self.last_joystick_pos = (target_x, target_y)
             self.touch_move(target_x, target_y, pointer_id=self.PID_JOYSTICK)
             if self.joystick_debug:
@@ -1232,8 +1256,26 @@ class WindowController:
                 print(f"[MOVE] drag_updated joystick_target=({target_x:.0f},{target_y:.0f}) angle={angle_degrees:.1f}")
         self.last_joystick_angle = angle_degrees
         self.last_joystick_update_time = now
+        self.last_joystick_command_time = now
 
-    def stop_joystick(self):
+    def restore_movement_after_attack(self, before_vector=None):
+        if not self.are_we_moving or self.last_joystick_pos == (None, None):
+            return False
+        try:
+            self.touch_move(self.last_joystick_pos[0], self.last_joystick_pos[1], pointer_id=self.PID_JOYSTICK)
+            self.last_joystick_keepalive_time = time.time()
+            if self.joystick_debug:
+                print(
+                    "[MOVE] movement_restored_after_attack=True "
+                    f"movement_vector_before_attack={before_vector} "
+                    f"movement_vector_after_attack={self.last_joystick_pos}"
+                )
+            return True
+        except Exception as e:
+            print(f"[MOVE] movement_restored_after_attack=False reason={e}")
+            return False
+
+    def stop_joystick(self, reason="explicit_stop"):
         """Release the joystick touch."""
         if self.are_we_moving:
             try:
@@ -1241,15 +1283,18 @@ class WindowController:
             except Exception as e:
                 print(f"Could not release joystick cleanly: {e}")
             self.are_we_moving = False
+            self.last_joystick_release_reason = reason
             self.last_joystick_down_time = 0.0
             self.last_joystick_pos = (None, None)
             self.last_joystick_angle = None
+            self.last_joystick_command_time = 0.0
+            self.last_joystick_keepalive_time = 0.0
             if self.joystick_debug:
-                print("[MOVE] drag_released")
+                print(f"[MOVE] drag_released joystick_released_reason={reason}")
 
     def keys_up(self, keys: List[str]):
         if "".join(keys).lower() == "wasd":
-            self.stop_joystick()
+            self.stop_joystick(reason="all_keys_up")
 
     def keys_down(self, keys: List[str]):
 
@@ -1260,28 +1305,52 @@ class WindowController:
                 delta_x += dx
                 delta_y += dy
 
-        joystick_needs_refresh = time.time() - self.last_joystick_down_time > 2.0
-        if self.are_we_moving and joystick_needs_refresh:
-            self.stop_joystick()
+        now = time.time()
+        if (
+                self.are_we_moving
+                and self.joystick_keepalive_enabled
+                and now - self.last_joystick_keepalive_time >= self.joystick_keepalive_interval
+                and self.last_joystick_pos != (None, None)
+        ):
+            self.touch_move(self.last_joystick_pos[0], self.last_joystick_pos[1], pointer_id=self.PID_JOYSTICK)
+            self.last_joystick_keepalive_time = now
 
         if not self.are_we_moving:
             self.touch_down(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
             self.are_we_moving = True
-            self.last_joystick_down_time = time.time()
+            self.last_joystick_down_time = now
+            self.last_joystick_keepalive_time = now
             self.last_joystick_pos = (self.joystick_x + delta_x, self.joystick_y + delta_y)
 
         if self.last_joystick_pos != (self.joystick_x + delta_x, self.joystick_y + delta_y):
             self.touch_move(self.joystick_x + delta_x, self.joystick_y + delta_y, pointer_id=self.PID_JOYSTICK)
             self.last_joystick_pos = (self.joystick_x + delta_x, self.joystick_y + delta_y)
+        self.last_joystick_command_time = now
 
     def click(self, x: int, y: int, delay=0.005, already_include_ratio=True, touch_up=True, touch_down=True):
         if not already_include_ratio:
             x = x * self.width_ratio
             y = y * self.height_ratio
         # Use PID_ATTACK for clicks so we don't interrupt movement
+        movement_before = self.last_joystick_pos if self.are_we_moving else None
+        if self.joystick_debug and touch_down and touch_up:
+            print(
+                "[AIM] attack_started "
+                f"input_backend_supports_parallel_drag={self.input_backend_supports_parallel_drag} "
+                f"movement_active_during_attack={self.are_we_moving} "
+                f"movement_vector_before_attack={movement_before}"
+            )
         if touch_down: self.touch_down(x, y, pointer_id=self.PID_ATTACK)
         time.sleep(delay)
         if touch_up: self.touch_up(x, y, pointer_id=self.PID_ATTACK)
+        restored = self.restore_movement_after_attack(movement_before) if touch_up else False
+        if self.joystick_debug and touch_down and touch_up:
+            print(
+                "[AIM] attack_finished "
+                f"movement_was_released_by_attack={not self.are_we_moving and movement_before is not None} "
+                f"movement_restored_after_attack={restored} "
+                f"movement_vector_after_attack={self.last_joystick_pos if self.are_we_moving else None}"
+            )
 
     def long_press(self, x: int, y: int, duration=1.15, already_include_ratio=True):
         if not already_include_ratio:
@@ -1329,6 +1398,14 @@ class WindowController:
         steps = max(int(distance / step_len), 1)
         step_delay = duration / steps
 
+        movement_before = self.last_joystick_pos if self.are_we_moving else None
+        if self.joystick_debug:
+            print(
+                "[AIM] attack_started "
+                f"input_backend_supports_parallel_drag={self.input_backend_supports_parallel_drag} "
+                f"movement_active_during_attack={self.are_we_moving} "
+                f"movement_vector_before_attack={movement_before}"
+            )
         self.touch_down(int(start_x), int(start_y), pointer_id=self.PID_ATTACK)
         for i in range(1, steps + 1):
             t = i / steps
@@ -1337,6 +1414,14 @@ class WindowController:
             time.sleep(step_delay)
             self.touch_move(int(cx), int(cy), pointer_id=self.PID_ATTACK)
         self.touch_up(int(end_x), int(end_y), pointer_id=self.PID_ATTACK)
+        restored = self.restore_movement_after_attack(movement_before)
+        if self.joystick_debug:
+            print(
+                "[AIM] attack_finished "
+                f"movement_was_released_by_attack={not self.are_we_moving and movement_before is not None} "
+                f"movement_restored_after_attack={restored} "
+                f"movement_vector_after_attack={self.last_joystick_pos if self.are_we_moving else None}"
+            )
 
     def close(self):
         if hasattr(self, 'scrcpy_client'):

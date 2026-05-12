@@ -13,7 +13,7 @@ import pyautogui
 from adbutils import adb
 from PIL import Image
 from customtkinter import CTkImage
-from brawler_selection import build_brawler_cards, filter_brawler_cards, selected_names_from_rows
+from brawler_selection import build_brawler_cards, filter_brawler_cards, selected_names_from_rows, trophy_sort_available
 from pyla_stats import load_stats
 from utils import (
     extract_text_strings,
@@ -94,6 +94,8 @@ class SelectBrawler:
         self._image_render_after_id = None
         self._current_filter_text = None
         self._current_sort_mode = "name"
+        self._rendered_card_signature = None
+        self._api_data_available = False
         self._selected_only = False
         self._needs_push_only = False
         self._target_trophies = 1000
@@ -142,18 +144,24 @@ class SelectBrawler:
         self.filter_var.trace_add("write", lambda *args: self.queue_image_filter_update())
 
         self.sort_var = tk.StringVar(value="Name")
-        ctk.CTkOptionMenu(
+        self.sort_menu = ctk.CTkButton(
             self.app,
-            values=["Name", "Trophies high -> low", "Trophies low -> high"],
-            variable=self.sort_var,
-            command=self.on_sort_change,
+            text="Sort: Name",
+            command=self.open_sort_selector,
             fg_color=self.colors["panel"],
-            button_color=self.colors["accent"],
-            button_hover_color=self.colors["selected"],
+            hover_color=self.colors["card_hover"],
             text_color=self.colors["text"],
             font=font(int(14 * scale_factor), "semibold"),
             width=int(220 * scale_factor),
-        ).place(x=int(310 * scale_factor), y=int(86 * scale_factor))
+        )
+        self.sort_menu.place(x=int(310 * scale_factor), y=int(86 * scale_factor))
+        self.sort_status_label = ctk.CTkLabel(
+            self.app,
+            text="",
+            font=font(int(11 * scale_factor)),
+            text_color=self.colors["warning"],
+        )
+        self.sort_status_label.place(x=int(310 * scale_factor), y=int(118 * scale_factor))
 
         self.selected_only_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
@@ -228,6 +236,7 @@ class SelectBrawler:
                 trophies = self.get_api_trophies_by_brawler()
                 if trophies:
                     self.trophies_source = "Brawl Stars API"
+                    self._api_data_available = True
                 if not self._closing:
                     self.app.after(0, lambda: self.update_images(self.filter_var.get(), force=True))
             except Exception as exc:
@@ -253,8 +262,51 @@ class SelectBrawler:
             "Trophies high -> low": "trophies_desc",
             "Trophies low -> high": "trophies_asc",
         }
-        self._current_sort_mode = modes.get(value, "name")
+        requested = modes.get(value, "name")
+        if requested.startswith("trophies") and not trophy_sort_available(self.api_trophies_by_brawler):
+            self._current_sort_mode = "name"
+            self.sort_var.set("Name")
+            self.sort_menu.configure(text="Sort: Name")
+            self.sort_status_label.configure(text="Trophy sorting unavailable: API data not loaded")
+        else:
+            self._current_sort_mode = requested
+            self.sort_menu.configure(text=f"Sort: {value}")
+            self.sort_status_label.configure(text="")
         self.update_images(self.filter_var.get(), force=True)
+
+    def open_sort_selector(self):
+        top = ctk.CTkToplevel(self.app)
+        top.configure(fg_color=self.colors["panel"])
+        top.title("Sort brawlers")
+        top.attributes("-topmost", True)
+        top.geometry(f"{int(320 * scale_factor)}x{int(220 * scale_factor)}+{int(830 * scale_factor)}+{int(180 * scale_factor)}")
+        ctk.CTkLabel(
+            top,
+            text="Sort brawlers",
+            font=font(int(18 * scale_factor), "bold"),
+            text_color=self.colors["text"],
+        ).pack(pady=(int(14 * scale_factor), int(8 * scale_factor)))
+        options = ["Name"]
+        if trophy_sort_available(self.api_trophies_by_brawler):
+            options.extend(["Trophies high -> low", "Trophies low -> high"])
+        else:
+            ctk.CTkLabel(
+                top,
+                text="Trophy sorting unavailable: API data not loaded",
+                font=font(int(12 * scale_factor)),
+                text_color=self.colors["warning"],
+                wraplength=int(260 * scale_factor),
+            ).pack(pady=(0, int(8 * scale_factor)))
+        for option in options:
+            ctk.CTkButton(
+                top,
+                text=option,
+                command=lambda value=option: (self.on_sort_change(value), top.destroy()),
+                fg_color=self.colors["accent"] if self.sort_var.get() == option else self.colors["panel_alt"],
+                hover_color=self.colors["card_hover"],
+                text_color=self.colors["text"],
+                width=int(250 * scale_factor),
+            ).pack(pady=int(4 * scale_factor))
 
     def on_filter_toggle(self):
         self._selected_only = bool(self.selected_only_var.get())
@@ -932,6 +984,12 @@ class SelectBrawler:
             self.trophies_source,
         )
         if not force and filter_signature == self._current_filter_text:
+            print(
+                "Brawler selector debug:",
+                "gui_render_reason=signature_unchanged",
+                "cards_updated_count=0",
+                "full_rerender_avoided=true",
+            )
             return
         self._current_filter_text = filter_signature
         if self._image_render_after_id is not None:
@@ -941,8 +999,6 @@ class SelectBrawler:
                 pass
             self._image_render_after_id = None
         self.visible_image_labels = []
-        for widget in self.image_frame.winfo_children():
-            widget.destroy()
 
         image_by_brawler = dict(self.images)
         cards = build_brawler_cards(
@@ -958,12 +1014,50 @@ class SelectBrawler:
             needs_push_only=self._needs_push_only,
             target_trophies=self._target_trophies,
         )
+        if self._current_sort_mode.startswith("trophies") and not trophy_sort_available(self.api_trophies_by_brawler):
+            self._current_sort_mode = "name"
+            self.sort_var.set("Name")
+            self.sort_status_label.configure(text="Trophy sorting unavailable: API data not loaded")
+            matches = filter_brawler_cards(
+                cards,
+                search=filter_text,
+                sort_mode="name",
+                selected_only=self._selected_only,
+                needs_push_only=self._needs_push_only,
+                target_trophies=self._target_trophies,
+            )
+        elif not trophy_sort_available(self.api_trophies_by_brawler):
+            self.sort_status_label.configure(text="Trophy sorting unavailable: API data not loaded")
+        else:
+            self.sort_status_label.configure(text="")
+        card_signature = tuple((card.name, card.trophies, card.selected) for card in matches)
+        if not force and card_signature == self._rendered_card_signature:
+            print(
+                "Brawler selector debug:",
+                "gui_render_reason=cards_unchanged",
+                "cards_updated_count=0",
+                "full_rerender_avoided=true",
+                f"trophy_sort_available={trophy_sort_available(self.api_trophies_by_brawler)}",
+                f"api_data_available={self._api_data_available}",
+            )
+            return
+        self._rendered_card_signature = card_signature
+        old_scroll = None
+        try:
+            old_scroll = self.image_frame._parent_canvas.yview()
+        except Exception:
+            pass
+        for widget in self.image_frame.winfo_children():
+            widget.destroy()
         print(
             "Brawler selector debug:",
+            f"gui_render_reason={'force' if force else 'filter_changed'}",
             f"filters_applied=search:{filter_text or '*'},sort:{self._current_sort_mode},"
             f"current:{self._selected_only},below_target:{self._needs_push_only}",
             f"visible={len(matches)}",
             f"trophies_source={self.trophies_source}",
+            f"trophy_sort_available={trophy_sort_available(self.api_trophies_by_brawler)}",
+            f"api_data_available={self._api_data_available}",
         )
 
         def render_batch(start_index=0):
@@ -987,7 +1081,7 @@ class SelectBrawler:
                 card.grid_propagate(False)
                 card._pyla_image_ref = img_tk
                 badge_text = "Selected" if card_data.selected else "Choose"
-                trophies_text = f"{card_data.trophies} trophies" if card_data.trophies is not None else "Not scanned"
+                trophies_text = f"Trophies: {card_data.trophies}" if card_data.trophies is not None else "Trophies: --"
                 icon = ctk.CTkLabel(card, image=img_tk, text="")
                 icon.place(x=int(10 * scale_factor), y=int(12 * scale_factor))
                 ctk.CTkLabel(
@@ -1026,6 +1120,17 @@ class SelectBrawler:
                 self._image_render_after_id = self.app.after(1, lambda: render_batch(next_index))
             else:
                 self._image_render_after_id = None
+                if old_scroll:
+                    try:
+                        self.image_frame._parent_canvas.yview_moveto(old_scroll[0])
+                    except Exception:
+                        pass
+                print(
+                    "Brawler selector debug:",
+                    f"cards_updated_count={len(matches)}",
+                    "full_rerender_avoided=false",
+                    f"selected_brawler={self.brawlers_data[0].get('brawler', '') if self.brawlers_data else ''}",
+                )
 
         render_batch()
 

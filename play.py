@@ -121,6 +121,8 @@ class Movement:
         self.projectile_speed_px_s = float(bot_config.get("projectile_speed_px_s", 900.0))
         self.auto_aim_min_confidence = float(bot_config.get("auto_aim_min_confidence", 0.62))
         self.auto_aim_close_tap_range = float(bot_config.get("auto_aim_close_tap_range", 0))
+        self.close_range_attack_override = str(bot_config.get("close_range_attack_override", "true")).lower() in ("yes", "true", "1")
+        self.attack_decision_debug = str(bot_config.get("attack_decision_debug", bot_config.get("auto_aim_debug", "yes"))).lower() in ("yes", "true", "1")
         self.auto_aim_debug = str(bot_config.get("auto_aim_debug", "yes")).lower() in ("yes", "true", "1")
         self.enable_flicker_retreat = str(bot_config.get("enable_flicker_retreat", "true")).lower() in ("yes", "true", "1")
         self.enable_combat_mans = str(bot_config.get("enable_combat_mans", "true")).lower() in ("yes", "true", "1")
@@ -205,7 +207,7 @@ class Movement:
         return self.attack()
 
     def _aimlog(self, *args):
-        if getattr(self, "auto_aim_debug", False) or visual_debug:
+        if getattr(self, "auto_aim_debug", False) or getattr(self, "attack_decision_debug", False) or visual_debug:
             print("[AIM]", *args)
 
     def auto_aim_attack(self, brawler, player_pos, enemy_data, walls, attack_range=None):
@@ -232,24 +234,31 @@ class Movement:
             aim_line_angle=aim_line_angle,
             min_confidence=getattr(self, "auto_aim_min_confidence", 0.62),
             close_tap_range=close_tap_range,
+            close_range_override=getattr(self, "close_range_attack_override", True),
+            dangerous_close_range=getattr(self, "dangerous_close_range", None),
         )
         target_s = tuple(map(int, decision.target)) if decision.target else None
         predicted_s = tuple(map(int, decision.predicted)) if decision.predicted else None
         angle_s = None if decision.aim_angle is None else round(decision.aim_angle, 1)
         dist_s = None if decision.distance is None else int(decision.distance)
         self._aimlog(
-            f"target={target_s} dist={dist_s} range={int(attack_range)} "
-            f"pred={predicted_s} angle={angle_s} conf={decision.confidence:.2f} "
-            f"tap={decision.use_tap} reason={decision.reason}"
+            "attack_decision "
+            f"target={target_s} target_bbox={decision.target_bbox} "
+            f"closest_enemy_distance={dist_s} attack_range={int(attack_range)} "
+            f"predicted_point={predicted_s} angle={angle_s} confidence={decision.confidence:.2f} "
+            f"threshold={decision.threshold:.2f} close_range_override={decision.close_range_override} "
+            f"los_status={decision.los_status} tap={decision.use_tap} reason={decision.reason}"
         )
         if not decision.should_fire:
+            self._aimlog(f"attack_denied_reason={decision.reason}")
             return False
         if decision.use_tap:
             return self.attack()
         if self.attack_cooldown > 0:
             current_time = time.time()
             if current_time - self.last_attack_time < self.attack_cooldown:
-                self._aimlog("skip: attack_cooldown")
+                remaining = max(0.0, self.attack_cooldown - (current_time - self.last_attack_time))
+                self._aimlog(f"attack_denied_reason=attack_on_cooldown cooldown_remaining_ms={int(remaining * 1000)}")
                 return False
             self.last_attack_time = current_time
         if hasattr(self.window_controller, "aim_attack_angle"):
@@ -2426,6 +2435,26 @@ class Play(Movement):
                 movement = self.unstuck_movement_if_needed(movement, current_time)
             self.do_movement(movement)
             self.time_since_movement = time.time()
+        else:
+            if getattr(self.window_controller, "joystick_debug", False):
+                skipped_ms = int((self.minimum_movement_delay - (current_time - self.time_since_movement)) * 1000)
+                print(
+                    "[MOVE] movement_update_skipped_reason=minimum_movement_delay "
+                    f"active_movement_intent={bool(movement)} wait_remaining_ms={max(0, skipped_ms)}"
+                )
+        if getattr(self.window_controller, "are_we_moving", False):
+            last_cmd = getattr(self.window_controller, "last_joystick_command_time", 0.0)
+            age = time.time() - last_cmd if last_cmd else 0.0
+            warning_after = getattr(self.window_controller, "movement_stall_warning_seconds", 0.35)
+            last_warn = getattr(self.window_controller, "_last_movement_stall_warning", 0.0)
+            if last_cmd and age > warning_after and time.time() - last_warn > 1.0:
+                self.window_controller._last_movement_stall_warning = time.time()
+                print(
+                    "[MOVE] movement_stall_detected "
+                    f"last_movement_command_age_ms={int(age * 1000)} "
+                    f"active_movement_intent={bool(movement)} "
+                    "blocked_by_sleep_or_io=unknown"
+                )
         return movement
 
     def enemy_pressure_movement_fallback(self, movement, data, brawler, current_time):

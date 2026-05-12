@@ -74,6 +74,15 @@ class StageManager:
         self.last_match_crossed_1000 = False
         self.stop_after_post_match_rewards = False
         self.completion_notification_sent = False
+        self.goal_confirmation_status = {
+            "status": "not_requested",
+            "brawler": "",
+            "api_trophies": None,
+            "target": None,
+            "confirmed": False,
+            "message": "",
+            "next_retry_at": 0.0,
+        }
         time_thresholds = load_toml_as_dict("./cfg/time_tresholds.toml")
         self.end_screen_dismiss_delay = float(time_thresholds.get("end_screen_dismiss_delay", 0.35))
         self.window_controller = window_controller
@@ -339,6 +348,112 @@ class StageManager:
         except (TypeError, ValueError):
             return default
 
+    @staticmethod
+    def _config_bool(value, default=False):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+    def get_api_brawler_trophies(self, brawler_name, force_token_refresh=False):
+        api_config = load_brawl_stars_api_config(
+            "cfg/brawl_stars_api.toml",
+            force_refresh=force_token_refresh,
+        )
+        token = str(api_config.get("api_token", "")).strip()
+        player_tag = str(api_config.get("player_tag", "")).strip()
+        timeout = int(api_config.get("timeout_sec", api_config.get("timeout_seconds", 10)) or 10)
+        if not self._config_bool(api_config.get("enabled", True), True):
+            raise RuntimeError("Brawl Stars API disabled")
+        if not token:
+            raise RuntimeError("Brawl Stars API token missing")
+        if not player_tag or player_tag == "#YOURTAG":
+            raise RuntimeError("Brawl Stars player_tag missing")
+        player_data = fetch_brawl_stars_player(token, player_tag, timeout)
+        target_key = normalize_brawler_name(brawler_name)
+        for api_brawler in player_data.get("brawlers", []):
+            if normalize_brawler_name(api_brawler.get("name", "")) == target_key:
+                return int(api_brawler.get("trophies", 0)), player_tag
+        raise RuntimeError(f"Brawler '{brawler_name}' not found in API response")
+
+    def confirm_goal_reached_via_api(self, brawler_name, target_trophies):
+        try:
+            api_config = load_brawl_stars_api_config("cfg/brawl_stars_api.toml")
+        except Exception as exc:
+            api_config = load_toml_as_dict("cfg/brawl_stars_api.toml")
+            now = time.time()
+            retry_after = float(api_config.get("retry_backoff_sec", 30) or 30)
+            self.goal_confirmation_status = {
+                "status": "pending",
+                "brawler": brawler_name,
+                "api_trophies": None,
+                "target": target_trophies,
+                "confirmed": False,
+                "message": str(exc)[:180],
+                "next_retry_at": now + retry_after,
+            }
+            print(
+                "api_unavailable_waiting_confirmation",
+                f"api_player_tag={api_config.get('player_tag', '')}",
+                f"api_retry_scheduled={int(retry_after)}s",
+                "goal_confirmed=False brawler_change_allowed=False",
+            )
+            return False
+        if not self._config_bool(api_config.get("confirm_goal_reached", True), True):
+            return True
+        now = time.time()
+        retry_after = float(api_config.get("retry_backoff_sec", 30) or 30)
+        poll_interval = float(api_config.get("poll_interval_sec", 60) or 60)
+        if now < float(self.goal_confirmation_status.get("next_retry_at", 0.0) or 0.0):
+            print("api_unavailable_waiting_confirmation")
+            return False
+        print(
+            "api_goal_confirmation_requested",
+            f"api_player_tag={api_config.get('player_tag', '')}",
+            f"target_trophies={target_trophies}",
+        )
+        try:
+            trophies, player_tag = self.get_api_brawler_trophies(brawler_name)
+        except Exception as exc:
+            self.goal_confirmation_status = {
+                "status": "pending",
+                "brawler": brawler_name,
+                "api_trophies": None,
+                "target": target_trophies,
+                "confirmed": False,
+                "message": str(exc)[:180],
+                "next_retry_at": now + retry_after,
+            }
+            print(
+                "api_unavailable_waiting_confirmation",
+                f"api_player_tag={api_config.get('player_tag', '')}",
+                f"api_retry_scheduled={int(retry_after)}s",
+                f"goal_confirmed=False brawler_change_allowed=False reason={str(exc)[:160]}",
+            )
+            return False
+        confirmed = trophies >= int(target_trophies)
+        self.goal_confirmation_status = {
+            "status": "confirmed" if confirmed else "below_target",
+            "brawler": brawler_name,
+            "api_trophies": trophies,
+            "target": target_trophies,
+            "confirmed": confirmed,
+            "message": "",
+            "next_retry_at": now + poll_interval,
+            "player_tag": player_tag,
+        }
+        print(
+            "api_brawler_trophies",
+            f"api_player_tag={player_tag}",
+            f"brawler={brawler_name}",
+            f"api_brawler_trophies={trophies}",
+            f"target_trophies={target_trophies}",
+            f"goal_confirmed={confirmed}",
+            f"brawler_change_allowed={confirmed}",
+        )
+        return confirmed
+
     def _prepare_next_push_all_brawler(self, target, type_of_push="trophies"):
         """Remove completed Push All rows and choose the current lowest remaining row.
 
@@ -559,6 +674,13 @@ class StageManager:
         )
         value = self._number_or_default(value, 0)
         value = max(value, saved_value)
+
+        if value >= push_current_brawler_till and type_of_push == "trophies" and not self.confirm_goal_reached_via_api(
+                self.brawlers_pick_data[0].get("brawler", ""),
+                push_current_brawler_till,
+        ):
+            print("Local trophies reached target, waiting for official Brawl Stars API confirmation before switching brawler.")
+            value = push_current_brawler_till - 1
 
         if value >= push_current_brawler_till:
             if len(self.brawlers_pick_data) <= 1:
@@ -902,6 +1024,16 @@ class StageManager:
                 )
                 value = self._number_or_default(value, 0)
                 use_play_again = self.should_use_play_again(value, push_current_brawler_till)
+
+                if value >= push_current_brawler_till and type_to_push == "trophies" and not self.confirm_goal_reached_via_api(
+                        current_brawler,
+                        push_current_brawler_till,
+                ):
+                    print("Local match result reached target, waiting for official Brawl Stars API confirmation before completion actions.")
+                    use_play_again = False
+                    self.brawlers_pick_data[0]["api_confirmation_pending"] = True
+                    save_brawler_data(self.brawlers_pick_data)
+                    value = push_current_brawler_till - 1
 
                 if value >= push_current_brawler_till:
                     use_play_again = False

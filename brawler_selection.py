@@ -12,6 +12,8 @@ class BrawlerCard:
     trophies: int | None = None
     selected: bool = False
     available: bool = True
+    target: int | None = None
+    today: int | None = None
 
 
 def _known_trophies(card: BrawlerCard) -> int:
@@ -74,6 +76,10 @@ def filter_brawler_cards(
     else:
         filtered.sort(key=lambda card: card.name.lower())
     return filtered
+
+
+def trophy_sort_available(trophies_by_brawler: dict[str, int] | None) -> bool:
+    return bool(trophies_by_brawler) and any(value is not None for value in trophies_by_brawler.values())
 
 
 def selected_names_from_rows(rows: Iterable[dict[str, Any]]) -> list[str]:

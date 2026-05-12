@@ -62,6 +62,14 @@ def _status_from_details(state_path: str | Path, details: dict[str, Any], stats:
         f"Session: +{int(stats.get('session_trophies_gained', 0) or 0)}",
         f"Uptime: {format_duration(uptime_seconds(stats))}",
     ]
+    api_confirmation = details.get("api_confirmation") if isinstance(details, dict) else None
+    if isinstance(api_confirmation, dict) and api_confirmation.get("status"):
+        api_trophies = api_confirmation.get("api_trophies")
+        lines.extend([
+            f"API status: {_short(api_confirmation.get('status'))}",
+            f"API trophies: {_short(api_trophies, 'unavailable')}",
+            f"API target: {_short(api_confirmation.get('target'), 'unknown')}",
+        ])
     last_error = str(stats.get("last_error") or "").strip()
     if last_error:
         lines.append(f"Last error: {html.escape(last_error[:180])}")
@@ -145,6 +153,12 @@ class TelegramControlServer:
     def start(self) -> bool:
         settings = self.settings_loader()
         self._heartbeat_enabled = _config_bool(settings.get("heartbeat_enabled"), True)
+        print(
+            "telegram_start_requested",
+            f"telegram_enabled={_config_bool(settings.get('enabled'), False)}",
+            f"telegram_token_present={bool(str(settings.get('bot_token') or '').strip())}",
+            f"telegram_admin_ids_count={len(settings.get('admin_ids') or [])}",
+        )
         if not _config_bool(settings.get("enabled"), False):
             return False
         if not _config_bool(settings.get("remote_control_enabled"), True):
@@ -153,6 +167,8 @@ class TelegramControlServer:
         if not token:
             print("Telegram control skipped: fill bot_token in cfg/telegram_config.toml first.")
             return False
+        if not settings.get("admin_ids"):
+            print("Telegram control warning: admin_ids is empty; control commands will be denied.")
         if self.thread and self.thread.is_alive():
             return True
 
@@ -175,7 +191,13 @@ class TelegramControlServer:
     async def _run(self) -> None:
         self.loop = asyncio.get_running_loop()
         self.stop_event = asyncio.Event()
+        settings = self.settings_loader()
+        token = str(settings.get("bot_token") or "").strip()
+        if not await self._validate_token(token):
+            print("telegram_polling_error invalid_token")
+            return
         print("Telegram control started: /start /status /pause /resume /stop /heartbeat /reload_config /brawler")
+        print("telegram_polling_started")
         while not self.stop_event.is_set():
             settings = self.settings_loader()
             token = str(settings.get("bot_token") or "").strip()
@@ -193,7 +215,21 @@ class TelegramControlServer:
                 raise
             except Exception as exc:
                 print(f"Telegram control polling error: {exc}")
+                print(f"telegram_polling_error {str(exc)[:180]}")
                 await asyncio.sleep(5)
+
+    async def _validate_token(self, token: str) -> bool:
+        if not token:
+            return False
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10) as response:
+                    data = await response.json()
+            return bool(data.get("ok"))
+        except Exception as exc:
+            print(f"telegram_polling_error token_validation_failed {str(exc)[:160]}")
+            return False
 
     async def _get_updates(self, token: str, timeout_seconds: int) -> list[dict[str, Any]]:
         url = f"https://api.telegram.org/bot{token}/getUpdates"
@@ -226,8 +262,10 @@ class TelegramControlServer:
 
         settings = self.settings_loader()
         command = text.split()[0].split("@", 1)[0].lower()
+        print(f"telegram_command_received command={command} chat_id={chat_id}")
         remember_chat_id(chat_id)
         if not is_admin(settings, user.get("id")):
+            print(f"telegram_access_denied user_id={user.get('id')}")
             await async_send_message(chat_id, "Access denied", token=token)
             return
 
@@ -264,9 +302,11 @@ class TelegramControlServer:
         chat_id = chat.get("id")
         message_id = message.get("message_id")
         data = str(callback.get("data") or "")
+        print(f"telegram_callback_received data={data} chat_id={chat_id}")
         await async_answer_callback(str(callback.get("id")), token=token)
         if chat_id is None or not is_admin(settings, user.get("id")):
             if chat_id is not None:
+                print(f"telegram_access_denied user_id={user.get('id')}")
                 await async_send_message(chat_id, "Access denied", token=token)
             return
         if data == "status":

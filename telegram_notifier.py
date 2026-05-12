@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import html
 from pathlib import Path
 from typing import Any
 
@@ -150,7 +151,7 @@ def _format_message(event_type: str, details: dict[str, Any]) -> str:
         lines.append("────────────────")
     message = str(details.get("message") or details.get("reason") or "").strip()
     if message:
-        lines.append(message)
+        lines.append(html.escape(message))
 
     hidden = {"message", "reason", "event_type"}
     ordered = [
@@ -177,7 +178,7 @@ def _format_message(event_type: str, details: dict[str, Any]) -> str:
         text = str(value)
         if len(text) > 180:
             text = text[:177] + "..."
-        lines.append(f"{FIELD_LABELS.get(key, key.replace('_', ' ').title())}: {text}")
+        lines.append(f"{FIELD_LABELS.get(key, key.replace('_', ' ').title())}: {html.escape(text)}")
     return "\n".join(lines)
 
 
@@ -239,7 +240,15 @@ async def async_send_message(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as response:
-                return response.status == 200
+                if response.status != 200:
+                    body = await response.text()
+                    print(f"telegram_message_send_failed status={response.status} body={body[:180]}")
+                    if payload.get("parse_mode"):
+                        payload.pop("parse_mode", None)
+                        async with session.post(url, json=payload, timeout=15) as retry:
+                            return retry.status == 200
+                    return False
+                return True
     except Exception as exc:
         print(f"Telegram message failed: {exc}")
         return False
@@ -269,7 +278,15 @@ async def async_edit_message(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=15) as response:
-                return response.status == 200
+                if response.status != 200:
+                    body = await response.text()
+                    print(f"telegram_message_send_failed status={response.status} body={body[:180]}")
+                    if payload.get("parse_mode"):
+                        payload.pop("parse_mode", None)
+                        async with session.post(url, json=payload, timeout=15) as retry:
+                            return retry.status == 200
+                    return False
+                return True
     except Exception as exc:
         print(f"Telegram edit failed: {exc}")
         return False

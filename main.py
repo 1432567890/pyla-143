@@ -21,7 +21,15 @@ from gui.main import App
 from gui.select_brawler import SelectBrawler
 from lobby_automation import LobbyAutomation
 from play import Play
-from runtime_control import RuntimeControlWindow
+from runtime_control import (
+    CHANGE_BRAWLER_REQUESTED,
+    OPEN_STATS_REQUESTED,
+    RELOAD_REQUESTED,
+    RUNNING,
+    RuntimeControlWindow,
+    read_state,
+    write_state,
+)
 from stage_manager import StageManager
 from state_finder import (
     get_state,
@@ -339,6 +347,7 @@ def pyla_main(data):
                 "target": current.get("push_until", ""),
                 "playstyle": bot_config.get("current_playstyle", ""),
                 "trophies": current.get("trophies", stats.get("brawlers", {}).get(current.get("brawler", ""), {}).get("current_trophies", "")),
+                "api_confirmation": getattr(self.Stage_manager, "goal_confirmation_status", {}),
             }
 
         def request_stop(self):
@@ -1007,6 +1016,19 @@ def pyla_main(data):
                     self.handle_offline_emulator()
 
         def handle_pause_control(self):
+            control_state = read_state(self.control_window.state_path)
+            if control_state == RELOAD_REQUESTED:
+                self.reload_config_safe()
+                write_state(self.control_window.state_path, RUNNING)
+                return False
+            if control_state == CHANGE_BRAWLER_REQUESTED:
+                print("Change brawler requested from pause menu; use Telegram /brawler or restart selector to choose a brawler.")
+                write_state(self.control_window.state_path, RUNNING)
+                return False
+            if control_state == OPEN_STATS_REQUESTED:
+                print("Open stats requested from pause menu:", load_stats())
+                write_state(self.control_window.state_path, RUNNING)
+                return False
             if self.control_window.is_stopped():
                 self.stop_requested = True
                 return False
