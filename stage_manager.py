@@ -21,6 +21,7 @@ from trophy_observer import TrophyObserver
 from utils import find_template_center, load_toml_as_dict, async_notify_user, \
     save_brawler_data, extract_text_strings, load_brawl_stars_api_config, fetch_brawl_stars_player, normalize_brawler_name
 from adaptive_brain import AdaptiveBrain
+from pyla_stats import record_brawler, record_trophy_update
 
 debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
 
@@ -802,6 +803,7 @@ class StageManager:
             self.Trophy_observer.change_trophies(lobby_trophies)
             self.brawlers_pick_data[0]["trophies"] = lobby_trophies
             save_brawler_data(self.brawlers_pick_data)
+            record_brawler(self.brawlers_pick_data[0].get("brawler", ""), lobby_trophies)
 
         if lobby_trophies is None:
             print("Could not read lobby trophies after prestige; trusting confirmed prestige reward screen.")
@@ -850,6 +852,7 @@ class StageManager:
                 self.last_match_trophy_before = trophies_before
                 self.last_match_trophy_after = trophies_after
                 self.last_match_trophy_delta = trophies_after - trophies_before
+                record_trophy_update(current_brawler, trophies_before, trophies_after)
                 self.last_match_crossed_1000 = trophies_before < 1000 <= trophies_after and trophies_after > trophies_before
                 self.adaptive_brain.record_result(found_game_result)
                 self.time_since_last_stat_change = time.time()
@@ -874,6 +877,15 @@ class StageManager:
                     self.current_target_details({
                         "result": found_game_result,
                         "target": self.brawlers_pick_data[0].get("push_until", ""),
+                    }),
+                )
+                self.send_webhook_notification(
+                    "trophy_update",
+                    None,
+                    self.current_target_details({
+                        "before": trophies_before,
+                        "after": trophies_after,
+                        "delta": trophies_after - trophies_before,
                     }),
                 )
                 push_current_brawler_till = self.brawlers_pick_data[0]['push_until']

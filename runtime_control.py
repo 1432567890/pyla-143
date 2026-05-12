@@ -8,6 +8,7 @@ from pathlib import Path
 
 RUNNING = "running"
 PAUSED = "paused"
+STOPPED = "stopped"
 
 
 def write_state(path, state):
@@ -44,6 +45,9 @@ class RuntimeControlWindow:
 
     def is_paused(self):
         return read_state(self.state_path) == PAUSED
+
+    def is_stopped(self):
+        return read_state(self.state_path) == STOPPED
 
     def close(self):
         write_state(self.state_path, RUNNING)
@@ -86,7 +90,7 @@ def run_window(state_path):
     ctk.set_appearance_mode("dark")
 
     root = ctk.CTk()
-    root.title("PylaAi-XXZ Control")
+    root.title("Pyla 143 Control")
     root.geometry("280x170")
     root.resizable(False, False)
     root.attributes("-topmost", True)
@@ -104,7 +108,7 @@ def run_window(state_path):
 
     title = ctk.CTkLabel(
         card,
-        text="PylaAi-XXZ Bot Control",
+        text="Pyla 143 Bot Control",
         text_color="#FFFFFF",
         font=("Arial", 17, "bold"),
     )

@@ -1,6 +1,7 @@
 ﻿import customtkinter as ctk
 import asyncio
 import threading
+import traceback
 import webbrowser
 import os
 import pyautogui
@@ -26,7 +27,7 @@ def S(value):
 
 class Hub:
     """
-    Updated, more user-friendly interface for the PylaAi-XXZ bot.
+    Updated, more user-friendly interface for the Pyla 143 bot.
     """
 
     def __init__(self,
@@ -39,6 +40,7 @@ class Hub:
         self.latest_version_str = latest_version_str
         self.correct_zoom = correct_zoom
         self.on_close_callback = on_close_callback
+        self._starting = False
 
         # -----------------------------------------------------------------------------------------
         # Load configs
@@ -74,7 +76,7 @@ class Hub:
         self.bot_config.setdefault("unstuck_movement_hold_time", 1.5)
         self.bot_config.setdefault("play_again_on_win", "no")
         self.bot_config.setdefault("post_match_action", "lobby")
-        self.bot_config.setdefault("current_playstyle", "default.pyla")
+        self.bot_config.setdefault("current_playstyle", "team_showdown.pyla")
         self.bot_config.setdefault("showdown_playstyle_mode", "follow")
         self.bot_config.setdefault("teammate_lock_max_jump", 320)
         self.bot_config.setdefault("teammate_follow_step_distance", 8)
@@ -88,6 +90,22 @@ class Hub:
         self.bot_config.setdefault("jump_pad_escape_requires_edge", "yes")
         self.bot_config.setdefault("jump_pad_escape_edge_margin", 0.22)
         self.bot_config.setdefault("jump_pad_escape_teammate_safe_distance", 360)
+        self.bot_config.setdefault("enable_flicker_retreat", True)
+        self.bot_config.setdefault("enable_combat_mans", True)
+        self.bot_config.setdefault("enable_joystick_movement", True)
+        self.bot_config.setdefault("movement_input_mode", "auto")
+        self.bot_config.setdefault("mans_threat_threshold", 0.42)
+        self.bot_config.setdefault("mans_hysteresis_ms", 450)
+        self.bot_config.setdefault("flicker_retreat_cooldown_ms", 900)
+        self.bot_config.setdefault("flicker_retreat_hold_ms", 650)
+        self.bot_config.setdefault("dangerous_close_range", 150)
+        self.bot_config.setdefault("movement_joystick_radius", 150)
+        self.bot_config.setdefault("joystick_update_min_interval", 0.035)
+        self.bot_config.setdefault("joystick_angle_deadzone", 4.0)
+        self.bot_config.setdefault("joystick_micro_steps", 2)
+        self.bot_config.setdefault("joystick_debug", "no")
+        self.bot_config.setdefault("brawler_ocr_attempts", 3)
+        self.bot_config.setdefault("brawler_ocr_confidence_threshold", 0.86)
         self.bot_config.setdefault("jump_pad_smoke_early_distance", 230)
 
 
@@ -121,7 +139,7 @@ class Hub:
 
         self.webhook_config.setdefault("webhook_url", self.general_config.get("personal_webhook", ""))
         self.webhook_config.setdefault("discord_id", self.general_config.get("discord_id", ""))
-        self.webhook_config.setdefault("username", "PylaAi-XXZ")
+        self.webhook_config.setdefault("username", "Pyla 143")
         self.webhook_config.setdefault("send_match_summary", False)
         self.webhook_config.setdefault("include_screenshot", True)
         self.webhook_config.setdefault("ping_when_stuck", False)
@@ -150,7 +168,7 @@ class Hub:
         # Main window
         # -----------------------------------------------------------------------------------------
         self.app = ctk.CTk()
-        self.app.title(f"PylaAi-XXZ Hub – {self.version_str}")
+        self.app.title(f"Pyla 143 Hub – {self.version_str}")
         self.app.geometry(f"{S(1000)}x{S(750)}")
         self.app.resizable(False, False)
 
@@ -659,7 +677,7 @@ class Hub:
     def _add_version_label(self, frame):
         version_label = ctk.CTkLabel(
             frame,
-            text="XXZ v1.2",
+            text="Pyla 143",
             font=("Arial", S(14), "bold"),
             text_color="#888888"
         )
@@ -1458,27 +1476,50 @@ class Hub:
     #  On Start => close window + callback
     # ---------------------------------------------------------------------------------------------
     def _on_start(self):
+        if self._starting:
+            print("Start ignored: bot startup is already in progress.")
+            return
+        self._starting = True
         try:
-            for after_id in self.app.tk.call("after", "info"):
+            playstyle = str(self.bot_config.get("current_playstyle", "")).strip()
+            if playstyle:
+                playstyle_path = Path("playstyles") / os.path.basename(playstyle)
+                if not playstyle_path.exists():
+                    print(f"Selected playstyle was not found: {playstyle_path}. Built-in logic will be used.")
+            try:
+                after_ids = self.app.tk.call("after", "info")
+            except Exception:
+                after_ids = []
+            for after_id in after_ids:
                 try:
                     self.app.after_cancel(after_id)
                 except Exception:
                     pass
-        except Exception:
-            pass
-        try:
-            self.app.withdraw()
-            self.app.update_idletasks()
-        except Exception:
-            pass
-        try:
-            self.app.quit()
-        except Exception:
-            pass
-        try:
-            self.app.destroy()
-        except Exception:
-            pass
 
-        if callable(self.on_close_callback):
-            self.on_close_callback()
+            try:
+                self.app.withdraw()
+                self.app.update_idletasks()
+            except Exception:
+                pass
+            try:
+                self.app.quit()
+            except Exception:
+                pass
+            try:
+                self.app.destroy()
+            except Exception:
+                pass
+            if callable(self.on_close_callback):
+                self.on_close_callback()
+        except Exception as exc:
+            self._starting = False
+            log_dir = Path("logs")
+            log_dir.mkdir(exist_ok=True)
+            crash_path = log_dir / "gui_start_error.log"
+            crash_path.write_text(traceback.format_exc(), encoding="utf-8")
+            print(f"Start failed: {exc}. Traceback saved to {crash_path.resolve()}")
+            try:
+                import tkinter.messagebox as messagebox
+                messagebox.showerror("Pyla start failed", f"{exc}\n\nTraceback saved to {crash_path.resolve()}")
+            except Exception:
+                pass

@@ -5,7 +5,7 @@ import os
 
 if platform.system() != "Windows" or "microsoft" in platform.uname()[3].lower():
     print("\n" + "!"*50)
-    print("  ERROR: This version of PylaAi-XXZ is for WINDOWS ONLY.")
+    print("  ERROR: This version of Pyla 143 is for WINDOWS ONLY.")
     print("  Mac or Linux detected. Please use the Universal branch.")
     print("!"*50 + "\n")
     sys.exit(1)
@@ -71,7 +71,7 @@ def ask_user(prompt_text):
     return response in ['y', 'yes']
 
 def setup_pyla():
-    print("\n" + "="*50 + "\n   PylaAi-XXZ - Windows Setup   \n" + "="*50)
+    print("\n" + "="*50 + "\n   Pyla 143 - Windows Setup   \n" + "="*50)
     
     # installing must have Pytorch CPU
     force_install(["torch", "torchvision", "--index-url", "https://download.pytorch.org/whl/cpu"])
@@ -183,7 +183,7 @@ if "--pyla-install" in sys.argv:
     sys.exit(0)
 
 setup(
-    name="PylaAi-XXZ", version="1.0.0",
+    name="Pyla-143", version="1.0.0",
     packages=find_packages(exclude=["api", "cfg", "models", "typization"]),
     install_requires=[]
 )

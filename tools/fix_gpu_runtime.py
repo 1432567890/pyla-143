@@ -29,7 +29,7 @@ def install_variant(variant):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Switch PylaAi-XXZ's ONNX runtime between DirectML, CUDA, and CPU."
+        description="Switch Pyla 143's ONNX runtime between DirectML, CUDA, and CPU."
     )
     parser.add_argument(
         "variant",

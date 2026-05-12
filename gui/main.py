@@ -2,10 +2,13 @@ import os
 import sys
 import tkinter as tk
 import time
+import traceback
+from pathlib import Path
 
 import customtkinter as ctk
 import utils
 from utils import api_base_url
+from pyla_stats import record_error
 
 sys.path.append(os.path.abspath('../'))
 
@@ -89,4 +92,24 @@ class App:
             if self.brawler_data:
                 utils.save_brawler_data(self.brawler_data)
                 time.sleep(0.05)
-                self.pyla_main(self.brawler_data)
+                try:
+                    self.pyla_main(self.brawler_data)
+                except Exception as exc:
+                    record_error(str(exc))
+                    log_dir = Path("logs")
+                    log_dir.mkdir(exist_ok=True)
+                    crash_path = log_dir / "bot_start_error.log"
+                    crash_path.write_text(traceback.format_exc(), encoding="utf-8")
+                    print(f"Bot failed after Start: {exc}. Traceback saved to {crash_path.resolve()}")
+                    try:
+                        root = ctk.CTk()
+                        root.withdraw()
+                        import tkinter.messagebox as messagebox
+                        messagebox.showerror(
+                            "Pyla bot failed to start",
+                            f"{exc}\n\nTraceback saved to {crash_path.resolve()}",
+                        )
+                        root.destroy()
+                    except Exception:
+                        pass
+                    raise

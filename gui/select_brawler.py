@@ -1,5 +1,7 @@
 ﻿import json
+import threading
 import time
+import traceback
 import tkinter as tk
 from difflib import SequenceMatcher
 from math import ceil
@@ -11,6 +13,8 @@ import pyautogui
 from adbutils import adb
 from PIL import Image
 from customtkinter import CTkImage
+from brawler_selection import build_brawler_cards, filter_brawler_cards, selected_names_from_rows
+from pyla_stats import load_stats
 from utils import (
     extract_text_strings,
     fetch_brawl_stars_player,
@@ -20,6 +24,7 @@ from utils import (
     resolve_brawler_name_alias,
     save_brawler_icon,
     get_dpi_scale,
+    load_saved_brawler_data,
 )
 from tkinter import filedialog
 
@@ -40,47 +45,59 @@ class SelectBrawler:
         install_tk_background_error_filter(self.app)
         tk._default_root = self.app
 
-        square_size = int(75 * scale_factor)
-        amount_of_rows = ceil(len(brawlers)/10) + 1
-        necessary_height = (int(145 * scale_factor) + amount_of_rows*square_size + (amount_of_rows-1)*int(3 * scale_factor))
-        window_height = min(necessary_height, int(820 * scale_factor))
-        image_frame_height = max(int(240 * scale_factor), window_height - int(190 * scale_factor))
-        self.app.title(f"PylaAi-XXZ v{pyla_version}")
+        square_size = int(68 * scale_factor)
+        amount_of_rows = ceil(len(brawlers)/4) + 1
+        necessary_height = int(220 * scale_factor) + amount_of_rows * int(104 * scale_factor)
+        window_height = min(necessary_height, int(860 * scale_factor))
+        image_frame_height = max(int(320 * scale_factor), window_height - int(230 * scale_factor))
+        self.app.title(f"Pyla 143 v{pyla_version}")
         self.brawlers = brawlers
 
-        self.app.geometry(f"{str(int(860 * scale_factor))}x{window_height}+{str(int(600 * scale_factor))}")
+        self.app.geometry(f"{str(int(980 * scale_factor))}x{window_height}+{str(int(520 * scale_factor))}")
         self.data_setter = data_setter
         self.colors = {
+            'bg': "#111318",
+            'panel': "#181B23",
+            'card': "#202431",
+            'card_hover': "#283047",
+            'selected': "#3F5CFF",
+            'accent': "#7C5CFF",
+            'accent_2': "#55B6FF",
+            'muted': "#9AA3B2",
+            'text': "#F4F7FB",
+            'border': "#343B4D",
+            'danger': "#C24B5A",
             'gray': "#7d7777",
             'red': "#cd5c5c",
             'darker_white': '#c4c4c4',
             'dark gray': '#1c1c1c',
-            'cherry red': '#960a00',
-            'ui box gray': '#242424',
-            'chess white': '#f0d9b5',
-            'chess brown': '#b58863',
+            'cherry red': '#7C5CFF',
+            'ui box gray': '#181B23',
+            'chess white': '#E5E7EB',
+            'chess brown': '#3F5CFF',
             'indian red': "#cd5c5c"
         }
 
-        self.app.configure(fg_color=self.colors['ui box gray'])
-
-
+        self.app.configure(fg_color=self.colors['bg'])
 
         self.images = []
         self.visible_image_labels = []
-        self.brawlers_data = []
+        self.brawlers_data = load_saved_brawler_data()
         self.farm_type = ""
         self.api_trophies_by_brawler = None
         self.api_trophies_by_normalized_brawler = None
+        self.trophies_source = "stats cache"
         self.api_trophy_error_reported = False
         self._filter_after_id = None
         self._image_render_after_id = None
         self._current_filter_text = None
+        self._current_sort_mode = "name"
+        self._selected_only = False
+        self._needs_push_only = False
+        self._target_trophies = 1000
         self._closing = False
         self._closed = False
-        api_trophies = self.get_api_trophies_by_brawler()
-        if api_trophies:
-            self.brawlers = [brawler for brawler in self.brawlers if brawler in api_trophies]
+        self._load_cached_trophies()
 
         for brawler in self.brawlers:
             img_path = f"./api/assets/brawler_icons/{brawler}.png"
@@ -93,51 +110,126 @@ class SelectBrawler:
             img_tk = CTkImage(img, size=(square_size, square_size))
             self.images.append((brawler, img_tk))  # Store tuple of brawler name and image
 
-        # Entry widget for filtering
+        print(
+            "Brawler selector debug:",
+            f"loaded_brawlers_count={len(self.brawlers)}",
+            f"selected_brawler={self.brawlers_data[0].get('brawler', '') if self.brawlers_data else ''}",
+            f"trophies_source={self.trophies_source}",
+        )
+
+        ctk.CTkLabel(
+            self.app,
+            text="Pyla 143 Brawler Selection",
+            font=("Arial", int(25 * scale_factor), "bold"),
+            text_color=self.colors["text"],
+        ).place(x=int(24 * scale_factor), y=int(16 * scale_factor))
+        ctk.CTkLabel(
+            self.app,
+            text="Pyla 143 is a fork of PylaAI, based on Pyla XXZ.",
+            font=("Arial", int(12 * scale_factor)),
+            text_color=self.colors["muted"],
+        ).place(x=int(25 * scale_factor), y=int(50 * scale_factor))
+
         self.filter_var = tk.StringVar()
         self.filter_entry = ctk.CTkEntry(
             self.app, textvariable=self.filter_var,
-            placeholder_text="Type brawler name...", font=("", int(20 * scale_factor)), width=int(200 * scale_factor),
-            fg_color=self.colors['ui box gray'], border_color=self.colors['cherry red'], text_color="white"
+            placeholder_text="Search brawler...", font=("Arial", int(15 * scale_factor)), width=int(270 * scale_factor),
+            fg_color=self.colors['panel'], border_color=self.colors['border'], text_color=self.colors["text"]
         )
-        header_text = "Write brawler"
-        search_x = int(330 * scale_factor)
-        search_width = int(220 * scale_factor)
-        search_label = ctk.CTkLabel(
-            self.app,
-            text=header_text,
-            font=("Comic sans MS", int(20 * scale_factor)),
-            text_color=self.colors['cherry red'],
-            width=search_width,
-            anchor="center",
-        )
-        search_label.place(x=search_x, y=int(scale_factor * 18))
-        self.filter_entry.configure(width=search_width)
-        self.filter_entry.place(x=search_x, y=int(scale_factor * 52))
+        self.filter_entry.place(x=int(24 * scale_factor), y=int(scale_factor * 86))
         self.filter_var.trace_add("write", lambda *args: self.queue_image_filter_update())
+
+        self.sort_var = tk.StringVar(value="Name")
+        ctk.CTkOptionMenu(
+            self.app,
+            values=["Name", "Trophies high -> low", "Trophies low -> high"],
+            variable=self.sort_var,
+            command=self.on_sort_change,
+            fg_color=self.colors["panel"],
+            button_color=self.colors["accent"],
+            button_hover_color=self.colors["selected"],
+            text_color=self.colors["text"],
+            width=int(220 * scale_factor),
+        ).place(x=int(310 * scale_factor), y=int(86 * scale_factor))
+
+        self.selected_only_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self.app,
+            text="Current",
+            variable=self.selected_only_var,
+            command=self.on_filter_toggle,
+            fg_color=self.colors["accent"],
+            hover_color=self.colors["selected"],
+            text_color=self.colors["text"],
+            border_color=self.colors["border"],
+        ).place(x=int(550 * scale_factor), y=int(90 * scale_factor))
+
+        self.needs_push_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self.app,
+            text="Below 1000",
+            variable=self.needs_push_var,
+            command=self.on_filter_toggle,
+            fg_color=self.colors["accent"],
+            hover_color=self.colors["selected"],
+            text_color=self.colors["text"],
+            border_color=self.colors["border"],
+        ).place(x=int(650 * scale_factor), y=int(90 * scale_factor))
 
         # Frame to hold the images
         self.image_frame = ctk.CTkScrollableFrame(
             self.app,
-            fg_color=self.colors['ui box gray'],
-            width=int(845 * scale_factor),
+            fg_color=self.colors['bg'],
+            width=int(952 * scale_factor),
             height=image_frame_height,
         )
-        self.image_frame.place(x=0, y=int(100 * scale_factor))
+        self.image_frame.place(x=int(14 * scale_factor), y=int(135 * scale_factor))
 
         self.update_images("")
-        ctk.CTkButton(self.app, text="Start", command=self.start_bot, fg_color=self.colors['ui box gray'],
+        ctk.CTkButton(self.app, text="Start", command=self.start_bot, fg_color=self.colors['selected'],
+                      hover_color=self.colors["accent"],
                       text_color="white",
-                      font=("Comic sans MS", int(25 * scale_factor)), border_color=self.colors['cherry red'],
-                      border_width=int(2 * scale_factor)).place(x=int(390 * scale_factor), y=int((window_height-60* scale_factor) ))
+                      font=("Arial", int(18 * scale_factor), "bold"), border_color=self.colors['accent_2'],
+                      border_width=int(1 * scale_factor), width=int(150 * scale_factor),
+                      height=int(42 * scale_factor)).place(x=int(810 * scale_factor), y=int((window_height-60* scale_factor) ))
 
-        ctk.CTkButton(self.app, text="Push All", command=self.open_push_all_target_window, fg_color=self.colors['ui box gray'],
+        ctk.CTkButton(self.app, text="Push All", command=self.open_push_all_target_window, fg_color=self.colors['panel'],
+                      hover_color=self.colors["card_hover"],
                       text_color="white",
-                      font=("Comic sans MS", int(25 * scale_factor)), border_color=self.colors['cherry red'],
-                      border_width=int(2 * scale_factor)).place(x=int(10 * scale_factor),
+                      font=("Arial", int(17 * scale_factor), "bold"), border_color=self.colors['border'],
+                      border_width=int(1 * scale_factor), width=int(150 * scale_factor),
+                      height=int(42 * scale_factor)).place(x=int(24 * scale_factor),
                                                                 y=int((window_height-60* scale_factor) ))
 
+        self._refresh_trophies_async()
         self.app.mainloop()
+
+    def _load_cached_trophies(self):
+        trophies = {}
+        try:
+            stats = load_stats()
+            for brawler, row in stats.get("brawlers", {}).items():
+                if isinstance(row, dict) and row.get("current_trophies") is not None:
+                    trophies[brawler] = int(row["current_trophies"])
+        except Exception as exc:
+            print(f"GUI error loading trophy cache: {exc}\n{traceback.format_exc()}")
+        self.api_trophies_by_brawler = trophies
+        self.api_trophies_by_normalized_brawler = {
+            normalize_brawler_name(name): value for name, value in trophies.items()
+        }
+
+    def _refresh_trophies_async(self):
+        def worker():
+            try:
+                self.api_trophies_by_brawler = None
+                trophies = self.get_api_trophies_by_brawler()
+                if trophies:
+                    self.trophies_source = "Brawl Stars API"
+                if not self._closing:
+                    self.app.after(0, lambda: self.update_images(self.filter_var.get(), force=True))
+            except Exception as exc:
+                print(f"GUI error refreshing trophies: {exc}\n{traceback.format_exc()}")
+        threading.Thread(target=worker, daemon=True).start()
 
     def queue_image_filter_update(self):
         if self._closing:
@@ -149,8 +241,22 @@ class SelectBrawler:
                 pass
         self._filter_after_id = self.app.after(
             120,
-            lambda: self.update_images(self.filter_var.get())
+            lambda: self.update_images(self.filter_var.get(), force=True)
         )
+
+    def on_sort_change(self, value):
+        modes = {
+            "Name": "name",
+            "Trophies high -> low": "trophies_desc",
+            "Trophies low -> high": "trophies_asc",
+        }
+        self._current_sort_mode = modes.get(value, "name")
+        self.update_images(self.filter_var.get(), force=True)
+
+    def on_filter_toggle(self):
+        self._selected_only = bool(self.selected_only_var.get())
+        self._needs_push_only = bool(self.needs_push_var.get())
+        self.update_images(self.filter_var.get(), force=True)
 
     def set_farm_type(self, value):
         self.farm_type = value
@@ -163,6 +269,12 @@ class SelectBrawler:
         self._cancel_queued_callbacks()
         self._hide_window()
         self.data_setter(brawlers_data)
+        if brawlers_data:
+            print(
+                "Brawler selector debug:",
+                f"selected_brawler={brawlers_data[0].get('brawler', '')}",
+                "config_updated=true",
+            )
         try:
             self.app.quit()
         except Exception:
@@ -275,9 +387,10 @@ class SelectBrawler:
     def _match_brawler_from_ocr_texts(texts, known_brawlers):
         best_brawler = None
         best_score = 0.0
+        ambiguous = False
         known_names = [(brawler, normalize_brawler_name(brawler)) for brawler in known_brawlers]
         for raw_text in texts:
-            normalized_text = resolve_brawler_name_alias(raw_text)
+            normalized_text = resolve_brawler_name_alias(normalize_brawler_name(raw_text))
             if not normalized_text:
                 continue
             for brawler, normalized_brawler in known_names:
@@ -290,10 +403,16 @@ class SelectBrawler:
                     )
                 else:
                     score = SequenceMatcher(None, normalized_text, normalized_brawler).ratio()
+                if abs(score - best_score) < 0.025 and brawler != best_brawler:
+                    ambiguous = True
                 if score > best_score:
                     best_score = score
                     best_brawler = brawler
-        return best_brawler if best_score >= 0.72 else None
+                    ambiguous = False
+        if ambiguous:
+            print(f"Could not choose first sorted brawler confidently; OCR was ambiguous: {texts}")
+            return None
+        return best_brawler if best_score >= 0.78 else None
 
     @staticmethod
     def _move_brawler_to_front(data, selected_brawler):
@@ -700,6 +819,8 @@ class SelectBrawler:
             self.brawlers_data.append(data)
 
             print("Selected Brawler Data :", self.brawlers_data)
+            print(f"Brawler selector debug: selected_brawler={brawler} config_updated=pending_start")
+            self.update_images(self.filter_var.get(), force=True)
             top.destroy()
 
         submit_button = ctk.CTkButton(
@@ -795,13 +916,21 @@ class SelectBrawler:
         self.wins_button.place(x=int(110 * scale_factor))
 
 
-    def update_images(self, filter_text):
+    def update_images(self, filter_text, force=False):
         if self._closing:
             return
         filter_text = (filter_text or "").strip().lower()
-        if filter_text == self._current_filter_text:
+        filter_signature = (
+            filter_text,
+            self._current_sort_mode,
+            self._selected_only,
+            self._needs_push_only,
+            tuple(sorted(selected_names_from_rows(self.brawlers_data))),
+            self.trophies_source,
+        )
+        if not force and filter_signature == self._current_filter_text:
             return
-        self._current_filter_text = filter_text
+        self._current_filter_text = filter_signature
         if self._image_render_after_id is not None:
             try:
                 self.app.after_cancel(self._image_render_after_id)
@@ -812,25 +941,84 @@ class SelectBrawler:
         for widget in self.image_frame.winfo_children():
             widget.destroy()
 
-        matches = [
-            (brawler, img_tk)
-            for brawler, img_tk in self.images
-            if brawler.startswith(filter_text)
-        ]
+        image_by_brawler = dict(self.images)
+        cards = build_brawler_cards(
+            [brawler for brawler, _ in self.images],
+            self.api_trophies_by_brawler or {},
+            selected_names_from_rows(self.brawlers_data),
+        )
+        matches = filter_brawler_cards(
+            cards,
+            search=filter_text,
+            sort_mode=self._current_sort_mode,
+            selected_only=self._selected_only,
+            needs_push_only=self._needs_push_only,
+            target_trophies=self._target_trophies,
+        )
+        print(
+            "Brawler selector debug:",
+            f"filters_applied=search:{filter_text or '*'},sort:{self._current_sort_mode},"
+            f"current:{self._selected_only},below_target:{self._needs_push_only}",
+            f"visible={len(matches)}",
+            f"trophies_source={self.trophies_source}",
+        )
 
         def render_batch(start_index=0):
             if self._closing:
                 return
-            for index in range(start_index, min(start_index + 16, len(matches))):
-                brawler, img_tk = matches[index]
-                row_num = index // 10
-                col_num = index % 10
-                label = ctk.CTkLabel(self.image_frame, image=img_tk, text="")
-                label._pyla_image_ref = img_tk
-                self.visible_image_labels.append(label)
-                label.bind("<Button-1>", lambda e, b=brawler: self.on_image_click(b))  # Bind click event
-                label.grid(row=row_num, column=col_num, padx=int(5 * scale_factor), pady=int(3 * scale_factor))
-            next_index = start_index + 16
+            for index in range(start_index, min(start_index + 12, len(matches))):
+                card_data = matches[index]
+                brawler = card_data.name
+                img_tk = image_by_brawler[brawler]
+                row_num = index // 4
+                col_num = index % 4
+                card = ctk.CTkFrame(
+                    self.image_frame,
+                    fg_color=self.colors["selected"] if card_data.selected else self.colors["card"],
+                    border_color=self.colors["accent_2"] if card_data.selected else self.colors["border"],
+                    border_width=int(2 * scale_factor) if card_data.selected else int(1 * scale_factor),
+                    corner_radius=int(8 * scale_factor),
+                    width=int(220 * scale_factor),
+                    height=int(92 * scale_factor),
+                )
+                card.grid_propagate(False)
+                card._pyla_image_ref = img_tk
+                badge_text = "Selected" if card_data.selected else "Choose"
+                trophies_text = f"{card_data.trophies} trophies" if card_data.trophies is not None else "Not scanned"
+                icon = ctk.CTkLabel(card, image=img_tk, text="")
+                icon.place(x=int(10 * scale_factor), y=int(12 * scale_factor))
+                ctk.CTkLabel(
+                    card,
+                    text=brawler.title(),
+                    font=("Arial", int(15 * scale_factor), "bold"),
+                    text_color=self.colors["text"],
+                    anchor="w",
+                ).place(x=int(86 * scale_factor), y=int(13 * scale_factor))
+                ctk.CTkLabel(
+                    card,
+                    text=trophies_text,
+                    font=("Arial", int(12 * scale_factor)),
+                    text_color="#E8ECF7" if card_data.selected else self.colors["muted"],
+                    anchor="w",
+                ).place(x=int(86 * scale_factor), y=int(40 * scale_factor))
+                ctk.CTkLabel(
+                    card,
+                    text=badge_text,
+                    font=("Arial", int(11 * scale_factor), "bold"),
+                    text_color="#FFFFFF" if card_data.selected else self.colors["accent_2"],
+                    anchor="w",
+                ).place(x=int(86 * scale_factor), y=int(63 * scale_factor))
+                self.visible_image_labels.append(card)
+                for widget in (card, icon):
+                    widget.bind("<Button-1>", lambda e, b=brawler: self.on_image_click(b))
+                    widget.bind("<Enter>", lambda e, c=card, s=card_data.selected: c.configure(
+                        fg_color=self.colors["selected"] if s else self.colors["card_hover"]
+                    ))
+                    widget.bind("<Leave>", lambda e, c=card, s=card_data.selected: c.configure(
+                        fg_color=self.colors["selected"] if s else self.colors["card"]
+                    ))
+                card.grid(row=row_num, column=col_num, padx=int(7 * scale_factor), pady=int(7 * scale_factor))
+            next_index = start_index + 12
             if next_index < len(matches):
                 self._image_render_after_id = self.app.after(1, lambda: render_batch(next_index))
             else:

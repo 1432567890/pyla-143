@@ -12,7 +12,7 @@ from performance_profile import PERFORMANCE_PROFILES, apply_performance_profile,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Apply known-good PylaAi-XXZ performance settings without editing emulator internals."
+        description="Apply known-good Pyla 143 performance settings without editing emulator internals."
     )
     parser.add_argument(
         "--profile",
@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Show what would be applied without saving.")
     args = parser.parse_args()
 
-    print("PylaAi-XXZ performance profile")
+    print("Pyla 143 performance profile")
     print(f"Python: {platform.python_version()} {platform.architecture()[0]}")
     if platform.architecture()[0] != "64bit":
         print("WARNING: 32-bit Python is not supported. Run setup.exe to install Python 3.11 64-bit.")

@@ -104,29 +104,29 @@ class DiscordControlServer:
                 getattr(interaction.guild, "id", None),
             ):
                 return True
-            await _reply(interaction, "You are not allowed to control this PylaAi-XXZ bot.")
+            await _reply(interaction, "You are not allowed to control this Pyla 143 bot.")
             return False
 
-        @tree.command(name="stop", description="Pause PylaAi-XXZ.")
+        @tree.command(name="stop", description="Pause Pyla 143.")
         async def stop_command(interaction: discord.Interaction) -> None:
             if not await _guard(interaction):
                 return
             set_runtime_state(self.state_path, paused=True)
-            await _reply(interaction, "PylaAi-XXZ paused.")
+            await _reply(interaction, "Pyla 143 paused.")
 
-        @tree.command(name="start", description="Resume PylaAi-XXZ.")
+        @tree.command(name="start", description="Resume Pyla 143.")
         async def start_command(interaction: discord.Interaction) -> None:
             if not await _guard(interaction):
                 return
             set_runtime_state(self.state_path, paused=False)
-            await _reply(interaction, "PylaAi-XXZ resumed.")
+            await _reply(interaction, "Pyla 143 resumed.")
 
-        @tree.command(name="status", description="Show whether PylaAi-XXZ is running or paused.")
+        @tree.command(name="status", description="Show whether Pyla 143 is running or paused.")
         async def status_command(interaction: discord.Interaction) -> None:
             if not await _guard(interaction):
                 return
             state = read_state(self.state_path)
-            await _reply(interaction, f"PylaAi-XXZ is {'paused' if state == PAUSED else 'running'}.")
+            await _reply(interaction, f"Pyla 143 is {'paused' if state == PAUSED else 'running'}.")
 
         @client.event
         async def on_ready() -> None:

@@ -1,4 +1,9 @@
-﻿# PylaAi-XXZ
+﻿# Pyla 143
+
+Pyla 143 is a fork of PylaAI, based on Pyla XXZ.
+
+- Pyla XXZ: https://github.com/xxz-888/PylaAi-XXZ
+- PylaAI: https://github.com/PylaAI/PylaAI
 
 This fork focuses on **Showdown** (trio). Other game modes still run off the upstream logic, but development effort and tuning here go into making Showdown play well end-to-end.
 
@@ -14,7 +19,7 @@ What the bot does in Showdown:
 
 ---
 
-PylaAi-XXZ is currently the best external Brawl Stars bot.
+Pyla 143 is currently the best external Brawl Stars bot.
 This repository is intended for devs and it's recommended for others to use the official version from the discord.
 
 **Warning :** This is a source-code fork. It now includes a one-click Windows setup helper, but the official build and support are still linked in the Pyla Discord.
@@ -33,7 +38,7 @@ For normal users, you only need `setup.exe`.
 5. Start your Android emulator.
 6. Open Brawl Stars in the emulator.
 7. Set the emulator resolution to `1920x1080` for best results.
-8. Double-click the generated `Run PylaAi-XXZ.bat` file or run `python main.py`.
+8. Double-click the generated `Run Pyla 143.bat` file or run `python main.py`.
 9. In the hub, choose your emulator, select your brawler setup, then press Start.
 
 Manual developer setup:
@@ -50,7 +55,7 @@ Brawl Stars API trophy autofill :
   `developer_password = "YOUR_DEVELOPER_PASSWORD"`
 - You can also set the player tag in the Hub under Additional Settings.
 - When you click a brawler in the brawler selection window, the Current Trophies field is filled from the API automatically.
-- Auto-refresh logs in to the official developer portal, detects the current public IP, deletes old PylaAi-XXZ-created keys, creates a fresh key for that IP, and saves the generated token locally.
+- Auto-refresh logs in to the official developer portal, detects the current public IP, deletes old Pyla 143-created keys, creates a fresh key for that IP, and saves the generated token locally.
 - Keep `delete_all_tokens = false` unless you really want every key on the developer account deleted.
 - Do not share a filled `cfg/brawl_stars_api.toml`; the committed file should keep tokens, email, and password blank.
 
@@ -65,7 +70,7 @@ Recovery features :
 - If Brawl Stars closes or another app is in front, the bot can relaunch Brawl Stars.
 - If the Brawl Stars Idle Disconnect / Reload dialog appears, the bot presses Reload.
 - If the scrcpy video feed freezes, the bot restarts the scrcpy feed instead of repeatedly restarting Brawl Stars.
-- While the bot is running, a small `PylaAi-XXZ Control` window lets you pause and resume movement safely.
+- While the bot is running, a small `Pyla 143 Control` window lets you pause and resume movement safely.
 
 Discord webhook and remote control :
 - Open `cfg/discord_config.toml`.
@@ -88,7 +93,7 @@ Discord webhook and remote control :
   1. In Discord, open `User Settings` -> `Advanced`.
   2. Enable `Developer Mode`.
   3. Right-click your Discord profile and click `Copy User ID`.
-  4. Paste it into `discord_control_user_id`. If this is blank, PylaAi-XXZ uses `discord_id`.
+  4. Paste it into `discord_control_user_id`. If this is blank, Pyla 143 uses `discord_id`.
 - Get a channel ID:
   1. With Developer Mode enabled, right-click the channel where commands should work.
   2. Click `Copy Channel ID`.
@@ -99,7 +104,7 @@ Discord webhook and remote control :
   2. Click `Copy Server ID`.
   3. Paste it into `discord_control_guild_id`.
   4. Filling this makes slash commands appear faster because they sync to that server only.
-- Restart PylaAi-XXZ after changing the Discord bot token or remote-control settings.
+- Restart Pyla 143 after changing the Discord bot token or remote-control settings.
 
 Telegram notifications and remote control :
 - Open `cfg/telegram_config.toml`.
@@ -108,7 +113,7 @@ Telegram notifications and remote control :
 - Open the Telegram bot on your phone and send `/start` or `/help` once. That chat is remembered for notifications.
 - Commands:
   `/status`, `/pause`, `/resume`, `/screenshot`, `/restart_game`, `/help`.
-- Restart PylaAi-XXZ after changing the Telegram token or remote-control settings.
+- Restart Pyla 143 after changing the Telegram token or remote-control settings.
 
 Performance troubleshooting :
 - Run `python tools/performance_check.py`.
@@ -155,7 +160,7 @@ If the bot drops to 1-3 IPS while Python CPU usage is low, first apply the safe 
 
 `python tools/apply_performance_profile.py --profile balanced`
 
-Use `--profile low-end` for older laptops that overheat or throttle. PylaAi-XXZ requires 64-bit Python; emulator 32-bit/GFX modes are optional emulator settings, not a Python requirement.
+Use `--profile low-end` for older laptops that overheat or throttle. Pyla 143 requires 64-bit Python; emulator 32-bit/GFX modes are optional emulator settings, not a Python requirement.
 
 # If you want to contribute, don't hesitate to create an Issue, a Pull Request, or/and make a ticket on the Pyla discord server at :
 https://discord.gg/xUusk3fw4A

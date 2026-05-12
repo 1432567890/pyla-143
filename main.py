@@ -32,6 +32,15 @@ from state_finder import (
 )
 from telegram_control import TelegramControlServer
 from time_management import TimeManagement
+from config_reload import reload_config_safe
+from pyla_stats import (
+    get_player_tag,
+    load_stats,
+    record_brawler,
+    record_error,
+    start_session,
+    stop_session,
+)
 from utils import (
     api_base_url,
     async_notify_user,
@@ -43,13 +52,15 @@ from utils import (
     get_latest_version,
     get_latest_wall_model_file,
     load_toml_as_dict,
+    load_saved_brawler_data,
+    save_brawler_data,
     update_missing_brawlers_info,
     update_wall_model_classes,
 )
 from window_controller import WindowController
 
 if platform.architecture()[0] != "64bit":
-    print("\nWARNING: PylaAi-XXZ is running on 32-bit Python.")
+    print("\nWARNING: Pyla 143 is running on 32-bit Python.")
     print("If IPS is very low, run python tools/performance_check.py to verify ONNX and emulator frame speed.")
     print(f"Current Python: {sys.executable}")
 
@@ -272,6 +283,8 @@ def pyla_main(data):
             self.disconnect_ocr_interval = 6.0
             self.control_window = RuntimeControlWindow()
             self.control_window.start()
+            start_session(data[0].get("brawler", ""), get_player_tag())
+            record_brawler(data[0].get("brawler", ""), data[0].get("trophies", 0))
             self.discord_control = DiscordControlServer(self.control_window.state_path)
             self.discord_control.start()
             self.telegram_control = TelegramControlServer(
@@ -279,10 +292,33 @@ def pyla_main(data):
                 screenshot_provider=self.window_controller.screenshot,
                 restart_game_callback=self.restart_brawl_stars,
                 status_provider=self.telegram_status,
+                reload_config_callback=self.reload_config_safe,
+                brawler_change_callback=self.request_brawler_change,
+                stop_callback=self.request_stop,
             )
             self.telegram_control.start()
+            self.send_runtime_notification("start")
             self.was_paused = False
             self.pause_started_at = None
+            self.stop_requested = False
+            self.pending_brawler_change = None
+
+        def send_runtime_notification(self, event_type, details=None):
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                payload = {
+                    "status": "running" if event_type == "start" else event_type,
+                    "brawler": self.Stage_manager.brawlers_pick_data[0].get("brawler", "") if self.Stage_manager.brawlers_pick_data else "",
+                    "playstyle": load_toml_as_dict("cfg/bot_config.toml").get("current_playstyle", ""),
+                    "mode": load_toml_as_dict("cfg/bot_config.toml").get("movement_input_mode", "auto"),
+                    "auto_aim": "enabled" if load_toml_as_dict("cfg/bot_config.toml").get("aimed_attacks", "no") in ("yes", True) else "configured",
+                }
+                if details:
+                    payload.update(details)
+                loop.run_until_complete(async_notify_user(event_type, details=payload))
+            finally:
+                loop.close()
 
         def initialize_stage_manager(self):
             self.Stage_manager.Trophy_observer.win_streak = data[0]['win_streak']
@@ -291,6 +327,8 @@ def pyla_main(data):
 
         def telegram_status(self):
             current = self.Stage_manager.brawlers_pick_data[0] if self.Stage_manager.brawlers_pick_data else {}
+            bot_config = load_toml_as_dict("cfg/bot_config.toml")
+            stats = load_stats()
             return {
                 "state": self.state or "unknown",
                 "ips": f"{self.ips_ema:.2f}" if self.ips_ema is not None else "",
@@ -299,7 +337,73 @@ def pyla_main(data):
                 "adb_device": getattr(getattr(self.window_controller, "device", None), "serial", ""),
                 "brawler": current.get("brawler", ""),
                 "target": current.get("push_until", ""),
+                "playstyle": bot_config.get("current_playstyle", ""),
+                "trophies": current.get("trophies", stats.get("brawlers", {}).get(current.get("brawler", ""), {}).get("current_trophies", "")),
             }
+
+        def request_stop(self):
+            self.stop_requested = True
+            self.window_controller.keys_up(list("wasd"))
+            return True
+
+        def reload_config_safe(self):
+            report = reload_config_safe()
+            general_config = load_toml_as_dict("cfg/general_config.toml")
+            bot_config = load_toml_as_dict("cfg/bot_config.toml")
+            self.max_ips = parse_max_ips(general_config.get('max_ips', self.max_ips or 0))
+            self.run_for_minutes = int(general_config.get('run_for_minutes', self.run_for_minutes))
+            self.Stage_manager.post_match_action = str(bot_config.get("post_match_action", self.Stage_manager.post_match_action)).strip().lower()
+            if self.Stage_manager.post_match_action not in ("lobby", "play_again"):
+                self.Stage_manager.post_match_action = "lobby"
+            self.send_runtime_notification(
+                "config_reload",
+                {"status": "success", "applied": ", ".join(report.get("applied", []) or ["none"])},
+            )
+            return report
+
+        def request_brawler_change(self, brawler):
+            current = self.Stage_manager.brawlers_pick_data[0] if self.Stage_manager.brawlers_pick_data else {}
+            next_row = dict(current) if current else {
+                "push_until": 1000,
+                "trophies": 0,
+                "wins": 0,
+                "type": "trophies",
+                "automatically_pick": False,
+                "win_streak": 0,
+            }
+            next_row["brawler"] = brawler
+            if self.state == "match":
+                self.pending_brawler_change = next_row
+                apply_mode = "after current match"
+            else:
+                if self.Stage_manager.brawlers_pick_data:
+                    self.Stage_manager.brawlers_pick_data[0] = next_row
+                else:
+                    self.Stage_manager.brawlers_pick_data = [next_row]
+                self.Play.current_brawler = brawler
+                self.Stage_manager.Trophy_observer.change_trophies(next_row.get("trophies", 0))
+                save_brawler_data(self.Stage_manager.brawlers_pick_data)
+                record_brawler(brawler, next_row.get("trophies", 0))
+                apply_mode = "immediate"
+                self.send_runtime_notification("brawler_changed", {"brawler": brawler, "status": "changed"})
+            print(f"Telegram brawler change requested: {brawler} ({apply_mode})")
+            return {"apply_mode": apply_mode}
+
+        def apply_pending_brawler_change_if_safe(self):
+            if not self.pending_brawler_change or self.state == "match":
+                return
+            next_row = dict(self.pending_brawler_change)
+            if self.Stage_manager.brawlers_pick_data:
+                self.Stage_manager.brawlers_pick_data[0] = next_row
+            else:
+                self.Stage_manager.brawlers_pick_data = [next_row]
+            self.Play.current_brawler = next_row.get("brawler", "")
+            self.Stage_manager.Trophy_observer.change_trophies(next_row.get("trophies", 0))
+            save_brawler_data(self.Stage_manager.brawlers_pick_data)
+            record_brawler(next_row.get("brawler", ""), next_row.get("trophies", 0))
+            print(f"Applied pending Telegram brawler change: {next_row.get('brawler', '')}")
+            self.send_runtime_notification("brawler_changed", {"brawler": next_row.get("brawler", ""), "status": "changed"})
+            self.pending_brawler_change = None
 
         @staticmethod
         def load_models():
@@ -903,6 +1007,9 @@ def pyla_main(data):
                     self.handle_offline_emulator()
 
         def handle_pause_control(self):
+            if self.control_window.is_stopped():
+                self.stop_requested = True
+                return False
             if not self.control_window.is_paused():
                 if self.was_paused:
                     paused_for = time.time() - self.pause_started_at if self.pause_started_at else 0
@@ -930,6 +1037,9 @@ def pyla_main(data):
             s_time = time.time()
             c = 0
             while True:
+                if self.stop_requested:
+                    print("Stop requested; exiting main loop safely.")
+                    break
                 if self.handle_pause_control():
                     s_time = time.time()
                     c = 0
@@ -1007,6 +1117,7 @@ def pyla_main(data):
 
                 state_start = time.perf_counter()
                 self.manage_time_tasks(frame)
+                self.apply_pending_brawler_change_if_safe()
                 self.perf_state_ema = self.update_ema(
                     self.perf_state_ema,
                     time.perf_counter() - state_start,
@@ -1045,6 +1156,8 @@ def pyla_main(data):
                     if work_time < target_period:
                         time.sleep(target_period - work_time)
 
+            stop_session()
+            self.send_runtime_notification("stop", {"status": "stopped"})
             self.discord_control.close()
             self.telegram_control.close()
             self.control_window.close()

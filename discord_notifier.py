@@ -71,7 +71,7 @@ def load_webhook_settings() -> dict[str, Any]:
     webhook_config["discord_id"] = str(
         webhook_config.get("discord_id") or general_config.get("discord_id", "")
     ).strip().strip("<@!>")
-    webhook_config.setdefault("username", "PylaAi-XXZ")
+    webhook_config.setdefault("username", "Pyla 143")
     webhook_config.setdefault("send_match_summary", False)
     webhook_config.setdefault("include_screenshot", True)
     webhook_config.setdefault("ping_when_stuck", False)
@@ -144,13 +144,13 @@ def _title_and_description(event_type: str, details: dict[str, Any]) -> tuple[st
             return "✅ Brawler Target Reached", f"**{brawler}** reached the configured target."
         return "✅ Brawler Target Reached", "A brawler reached the configured target."
     if event_type == "completed":
-        return "🏆 All Targets Complete", "PylaAi-XXZ finished every queued target."
+        return "🏆 All Targets Complete", "Pyla 143 finished every queued target."
     if event_type == "bot_is_stuck":
-        reason = str(details.get("reason") or "PylaAi-XXZ could not recover automatically.")
+        reason = str(details.get("reason") or "Pyla 143 could not recover automatically.")
         return "🚨 Bot Needs Attention", reason
     if event_type == "test":
         return "🧪 Webhook Test", "Discord webhook is connected correctly."
-    return "📣 PylaAi-XXZ Update", str(details.get("message") or "Bot event received.")
+    return "📣 Pyla 143 Update", str(details.get("message") or "Bot event received.")
 
 
 def _format_field_name(key: str) -> str:
@@ -238,7 +238,7 @@ async def async_notify_user(
         color=EVENT_COLORS.get(event_type, 0x95A5A6),
         timestamp=discord.utils.utcnow(),
     )
-    embed.set_footer(text="PylaAi-XXZ")
+    embed.set_footer(text="Pyla 143")
     _add_fields(embed, details)
 
     file = None
@@ -249,7 +249,7 @@ async def async_notify_user(
 
     send_kwargs = {
         "embed": embed,
-        "username": str(settings.get("username") or "PylaAi-XXZ"),
+        "username": str(settings.get("username") or "Pyla 143"),
         "allowed_mentions": discord.AllowedMentions(users=True, roles=False, everyone=False),
     }
     if ping:
@@ -273,6 +273,6 @@ async def async_send_test_notification() -> bool:
         "test",
         details={
             "state": "configured",
-            "message": "This is a manual test from the PylaAi-XXZ Hub.",
+            "message": "This is a manual test from the Pyla 143 Hub.",
         },
     )

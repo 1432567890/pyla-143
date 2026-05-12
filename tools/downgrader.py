@@ -67,7 +67,7 @@ def selected_ref_from_args_or_prompt(commits):
 
 def main() -> int:
     if "--help" in sys.argv or "-h" in sys.argv:
-        print("PylaAi-XXZ downgrader")
+        print("Pyla 143 downgrader")
         print("Run downgrader.exe and press Enter to install the version before the latest commit.")
         print("You can also choose a recent version by number.")
         print("Fast rollback: downgrader.exe --previous")
@@ -76,12 +76,12 @@ def main() -> int:
 
     project_dir = app_dir()
     print("=" * 50)
-    print("PylaAi-XXZ Downgrader")
+    print("Pyla 143 Downgrader")
     print("=" * 50)
     print(f"Project folder: {project_dir}")
 
     if not (project_dir / "main.py").exists():
-        print("downgrader.exe must be inside the PylaAi-XXZ project folder next to main.py.")
+        print("downgrader.exe must be inside the Pyla 143 project folder next to main.py.")
         wait_for_enter()
         return 1
 

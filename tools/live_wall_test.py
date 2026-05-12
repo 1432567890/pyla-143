@@ -31,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run a short live wall-detection test.")
     parser.add_argument("--seconds", type=int, default=180)
     parser.add_argument("--rounds", type=int, default=0, help="Stop after this many completed rounds. 0 disables round counting.")
-    parser.add_argument("--visual-debug", action="store_true", help="Show the live PylaAi-XXZ Visual Debug overlay window.")
+    parser.add_argument("--visual-debug", action="store_true", help="Show the live Pyla 143 Visual Debug overlay window.")
     parser.add_argument("--brawler", default=None)
     args = parser.parse_args()
 

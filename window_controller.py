@@ -470,6 +470,14 @@ class WindowController:
         self.height_ratio = None
         self.joystick_x, self.joystick_y = None, None
         self.are_we_moving = False
+        bot_config = load_toml_as_dict("cfg/bot_config.toml")
+        self.joystick_radius = float(bot_config.get("movement_joystick_radius", 150.0))
+        self.joystick_update_min_interval = float(bot_config.get("joystick_update_min_interval", 0.035))
+        self.joystick_angle_deadzone = float(bot_config.get("joystick_angle_deadzone", 4.0))
+        self.joystick_micro_steps = max(0, min(3, int(bot_config.get("joystick_micro_steps", 2))))
+        self.joystick_debug = str(bot_config.get("joystick_debug", "no")).lower() in ("yes", "true", "1")
+        self.last_joystick_angle = None
+        self.last_joystick_update_time = 0.0
         self.PID_JOYSTICK = 1  # ID for WASD movement
         self.PID_ATTACK = 2  # ID for clicks/attacks
         self.check_if_brawl_stars_crashed_timer = load_toml_as_dict("cfg/time_tresholds.toml")["check_if_brawl_stars_crashed"]
@@ -1168,30 +1176,62 @@ class WindowController:
     def touch_up(self, x, y, pointer_id=0):
         self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_UP, pointer_id)
 
-    def move_joystick_angle(self, angle_degrees: float, radius: float = 150.0):
+    def move_joystick_angle(self, angle_degrees: float, radius: float = None, urgent: bool = False):
         """Move the joystick in an exact direction given by angle_degrees.
 
         0° = right, 90° = down, 180° = left, 270° = up (screen coordinates).
         radius controls how far from center the touch point is placed.
         """
+        if radius is None:
+            radius = self.joystick_radius
+        angle_degrees = float(angle_degrees) % 360.0
+        now = time.time()
+        if self.are_we_moving and self.last_joystick_angle is not None:
+            diff = abs((angle_degrees - self.last_joystick_angle + 180.0) % 360.0 - 180.0)
+            if (
+                    not urgent
+                    and diff < self.joystick_angle_deadzone
+                    and now - self.last_joystick_update_time < self.joystick_update_min_interval
+            ):
+                return
+
         angle_rad = math.radians(angle_degrees)
         scaled_radius = radius * self.scale_factor
         target_x = self.joystick_x + math.cos(angle_rad) * scaled_radius
         target_y = self.joystick_y + math.sin(angle_rad) * scaled_radius
 
-        joystick_needs_refresh = time.time() - self.last_joystick_down_time > 2.0
+        joystick_needs_refresh = now - self.last_joystick_down_time > 2.0
         if self.are_we_moving and joystick_needs_refresh:
             self.stop_joystick()
 
         if not self.are_we_moving:
             self.touch_down(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
             self.are_we_moving = True
-            self.last_joystick_down_time = time.time()
+            self.last_joystick_down_time = now
             self.last_joystick_pos = (target_x, target_y)
             self.touch_move(target_x, target_y, pointer_id=self.PID_JOYSTICK)
+            if self.joystick_debug:
+                print(
+                    f"[MOVE] drag_started joystick_center=({self.joystick_x:.0f},{self.joystick_y:.0f}) "
+                    f"joystick_radius={scaled_radius:.0f} joystick_target=({target_x:.0f},{target_y:.0f})"
+                )
         elif self.last_joystick_pos != (target_x, target_y):
-            self.touch_move(target_x, target_y, pointer_id=self.PID_JOYSTICK)
+            if self.joystick_micro_steps > 0 and not urgent:
+                start_x, start_y = self.last_joystick_pos
+                for step in range(1, self.joystick_micro_steps + 1):
+                    t = step / self.joystick_micro_steps
+                    self.touch_move(
+                        start_x + (target_x - start_x) * t,
+                        start_y + (target_y - start_y) * t,
+                        pointer_id=self.PID_JOYSTICK,
+                    )
+            else:
+                self.touch_move(target_x, target_y, pointer_id=self.PID_JOYSTICK)
             self.last_joystick_pos = (target_x, target_y)
+            if self.joystick_debug:
+                print(f"[MOVE] drag_updated joystick_target=({target_x:.0f},{target_y:.0f}) angle={angle_degrees:.1f}")
+        self.last_joystick_angle = angle_degrees
+        self.last_joystick_update_time = now
 
     def stop_joystick(self):
         """Release the joystick touch."""
@@ -1203,6 +1243,9 @@ class WindowController:
             self.are_we_moving = False
             self.last_joystick_down_time = 0.0
             self.last_joystick_pos = (None, None)
+            self.last_joystick_angle = None
+            if self.joystick_debug:
+                print("[MOVE] drag_released")
 
     def keys_up(self, keys: List[str]):
         if "".join(keys).lower() == "wasd":

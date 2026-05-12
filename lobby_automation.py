@@ -145,12 +145,15 @@ class LobbyAutomation:
         wr = self.window_controller.width_ratio
         hr = self.window_controller.height_ratio
         general_config = load_toml_as_dict("cfg/general_config.toml")
+        bot_config = load_toml_as_dict("cfg/bot_config.toml")
         debug_enabled = str(general_config.get("super_debug", "no")).lower() in ("yes", "true", "1")
         try:
             ocr_scale = float(general_config.get("ocr_scale_down_factor", 0.65))
         except (TypeError, ValueError):
             ocr_scale = 0.65
         ocr_scale = max(0.35, min(1.0, ocr_scale))
+        ocr_attempts = max(1, min(5, int(bot_config.get("brawler_ocr_attempts", 3))))
+        confidence_threshold = max(0.50, min(1.0, float(bot_config.get("brawler_ocr_confidence_threshold", 0.86))))
         target_key = self.normalize_ocr_name(brawler)
 
         if not self.open_brawler_selection():
@@ -161,33 +164,30 @@ class LobbyAutomation:
         c = 0
         found_brawler = False
         for i in range(50):
-            screenshot_full = self.window_controller.screenshot()
+            screenshot_full = self.wait_for_stable_screen()
             full_h = screenshot_full.shape[0]
-            screenshot = cv2.resize(
-                screenshot_full,
-                (int(screenshot_full.shape[1] * ocr_scale), int(screenshot_full.shape[0] * ocr_scale)),
-                interpolation=cv2.INTER_AREA,
+            matches, ocr_debug = self.find_brawler_ocr_matches(
+                target_key,
+                ocr_scale,
+                attempts=ocr_attempts,
+                confidence_threshold=confidence_threshold,
             )
-
-            if debug_enabled: print("extracting text on current screen...")
-            results = extract_text_and_positions(screenshot)
-            reworked_results = {}
-            for key in results.keys():
-                orig_key = key
-                key = self.normalize_ocr_name(key)
-                key = self.resolve_ocr_typos(key)
-                reworked_results[key] = results[orig_key]
             if debug_enabled:
-                print("All detected text while looking for brawler name:", reworked_results.keys())
-                print()
-            matches = []
-            for detected_name, text_box in reworked_results.items():
-                if self.names_match(detected_name, target_key):
-                    score = self.name_match_score(detected_name, target_key)
-                    matches.append((score, detected_name, text_box))
+                print(
+                    f"target_brawler={brawler} OCR attempts={ocr_debug['attempts']} "
+                    f"raw={ocr_debug['raw']} normalized={ocr_debug['normalized']} "
+                    f"best={ocr_debug.get('best')} confidence={ocr_debug.get('confidence', 0):.2f}"
+                )
             if matches:
                 matches.sort(key=lambda item: item[0], reverse=True)
-                _, detected_name, text_box = matches[0]
+                confidence, detected_name, text_box = matches[0]
+                if confidence < confidence_threshold:
+                    print(
+                        f"false_click_prevented target_brawler={brawler} matched={detected_name} "
+                        f"confidence={confidence:.2f} threshold={confidence_threshold:.2f}"
+                    )
+                    time.sleep(0.35)
+                    continue
                 x, y = text_box['center']
                 click_x = int(x / ocr_scale)
                 # EasyOCR returns the text label center, not the card/icon center.
@@ -195,8 +195,16 @@ class LobbyAutomation:
                 y_offset = int(full_h * 0.088)
                 click_y = int((y / ocr_scale) - y_offset)
                 click_y = max(0, min(full_h - 1, click_y))
+                click_allowed = self.is_brawler_click_position_safe(click_x, click_y, screenshot_full)
+                print(
+                    f"Found brawler {brawler} (OCR: {detected_name}) confidence={confidence:.2f} "
+                    f"click_allowed={click_allowed} clicking icon at ({click_x}, {click_y}), y_offset={y_offset}"
+                )
+                if not click_allowed:
+                    print("false_click_prevented reason=unsafe_card_position")
+                    time.sleep(0.35)
+                    continue
                 self.window_controller.click(click_x, click_y)
-                print(f"Found brawler {brawler} (OCR: {detected_name}) clicking icon at ({click_x}, {click_y}), y_offset={y_offset}")
                 time.sleep(1.0)
 
                 verify_screenshot = self.window_controller.screenshot()
@@ -251,14 +259,88 @@ class LobbyAutomation:
                 wr = self.window_controller.width_ratio
                 hr = self.window_controller.height_ratio
                 self.window_controller.swipe(int(1700 * wr), int(900 * hr), int(1700 * wr), int(850 * hr), duration=0.8)
+                print(f"scroll_count={i + 1} screen_stable=False click_allowed=False")
+                self.wait_for_stable_screen()
                 c += 1
                 continue
 
             self.window_controller.swipe(int(1700 * wr), int(900 * hr), int(1700 * wr), int(650 * hr), duration=0.8)
+            print(f"scroll_count={i + 1} screen_stable=False click_allowed=False")
+            self.wait_for_stable_screen()
             time.sleep(1)
         if not found_brawler:
             print(f"WARNING: Brawler '{brawler}' was not found after 50 scroll attempts. "
                   f"The bot will continue with the currently selected brawler.")
+            return False
+        return True
+
+    def wait_for_stable_screen(self, attempts=4, delay=0.18, diff_threshold=2.8):
+        previous = None
+        latest = self.window_controller.screenshot()
+        stable = False
+        for _ in range(attempts):
+            time.sleep(delay)
+            latest = self.window_controller.screenshot()
+            if previous is not None:
+                small_latest = cv2.resize(latest, (160, 90), interpolation=cv2.INTER_AREA)
+                small_previous = cv2.resize(previous, (160, 90), interpolation=cv2.INTER_AREA)
+                diff = float(np.mean(cv2.absdiff(small_latest, small_previous)))
+                if diff <= diff_threshold:
+                    stable = True
+                    break
+            previous = latest
+        print(f"screen_stable={stable}")
+        return latest
+
+    def find_brawler_ocr_matches(self, target_key, ocr_scale, attempts=3, confidence_threshold=0.86):
+        votes = {}
+        raw_seen = []
+        normalized_seen = []
+        for attempt in range(attempts):
+            screenshot_full = self.window_controller.screenshot()
+            screenshot = cv2.resize(
+                screenshot_full,
+                (int(screenshot_full.shape[1] * ocr_scale), int(screenshot_full.shape[0] * ocr_scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+            results = extract_text_and_positions(screenshot)
+            for raw_text, text_box in results.items():
+                raw_seen.append(str(raw_text))
+                detected_name = self.resolve_ocr_typos(self.normalize_ocr_name(raw_text))
+                normalized_seen.append(detected_name)
+                if not self.names_match(detected_name, target_key):
+                    continue
+                score = self.name_match_score(detected_name, target_key)
+                item = votes.setdefault(detected_name, {"count": 0, "score": 0.0, "box": text_box})
+                item["count"] += 1
+                item["score"] += score
+                item["box"] = text_box
+            time.sleep(0.12 + attempt * 0.04)
+
+        matches = []
+        for detected_name, item in votes.items():
+            vote_ratio = item["count"] / max(1, attempts)
+            avg_score = item["score"] / max(1, item["count"])
+            confidence = min(1.0, vote_ratio * 0.58 + max(0.0, min(1.0, avg_score / 2.0)) * 0.42)
+            if confidence >= confidence_threshold * 0.75:
+                matches.append((confidence, detected_name, item["box"]))
+        matches.sort(key=lambda item: item[0], reverse=True)
+        debug_payload = {
+            "attempts": attempts,
+            "raw": raw_seen[:20],
+            "normalized": normalized_seen[:20],
+            "best": matches[0][1] if matches else None,
+            "confidence": matches[0][0] if matches else 0.0,
+        }
+        return matches, debug_payload
+
+    def is_brawler_click_position_safe(self, click_x, click_y, screenshot):
+        h, w = screenshot.shape[:2]
+        if not (0 <= click_x < w and 0 <= click_y < h):
+            return False
+        if click_y < h * 0.12 or click_y > h * 0.88:
+            return False
+        if click_x < w * 0.08 or click_x > w * 0.92:
             return False
         return True
 
@@ -328,7 +410,17 @@ class LobbyAutomation:
     @staticmethod
     def normalize_ocr_name(value: str) -> str:
         normalized = str(value).lower()
-        for symbol in [' ', '-', '.', "&", "'", "`", "_"]:
+        replacements = {
+            "0": "o",
+            "1": "l",
+            "|": "l",
+            "!": "i",
+            "€": "e",
+            "$": "s",
+        }
+        for src, dst in replacements.items():
+            normalized = normalized.replace(src, dst)
+        for symbol in [' ', '-', '.', "&", "'", "`", "_", ":", ";", ",", "’"]:
             normalized = normalized.replace(symbol, "")
         return normalized
 

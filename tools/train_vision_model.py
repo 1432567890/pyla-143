@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train and export a better PylaAi-XXZ vision model.")
+    parser = argparse.ArgumentParser(description="Train and export a better Pyla 143 vision model.")
     parser.add_argument("--data", default="datasets/vision_model/data.yaml", help="YOLO data.yaml path.")
     parser.add_argument("--base", default="yolov8n.pt", help="YOLO .pt base model or previous best.pt.")
     parser.add_argument("--epochs", type=int, default=80)

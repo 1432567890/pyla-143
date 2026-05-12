@@ -1,6 +1,8 @@
 ﻿.venv/
+.DS_Store
 /.idea
 *.pyc
+cfg/pyla_stats.json
 cfg/match_history.toml
 cfg/telegram_config.local.toml
 cfg/telegram_chats.toml
