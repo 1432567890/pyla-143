@@ -216,8 +216,6 @@ class SelectBrawler:
             x=0,
             y=self.image_frame_top,
             relwidth=1.0,
-            width=-int(12 * scale_factor),
-            height=image_frame_height,
         )
         self.app.bind("<Configure>", self.on_window_resize)
 
