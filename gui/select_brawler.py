@@ -47,23 +47,27 @@ class SelectBrawler:
         install_tk_background_error_filter(self.app)
         tk._default_root = self.app
 
-        image_frame_width = int(845 * scale_factor)
-        grid_pad = max(1, int(3 * scale_factor))
-        scrollbar_allowance = max(18, int(26 * scale_factor))
-        square_size = min(
-            int(75 * scale_factor),
-            max(36, int((image_frame_width - scrollbar_allowance - 20 * grid_pad) / 10)),
-        )
+        square_size = int(75 * scale_factor)
         self.square_size = square_size
-        self.grid_pad = grid_pad
+        self.grid_pad = max(1, int(5 * scale_factor))
+        self.grid_max_columns = 10
+        self.scrollbar_allowance = max(18, int(28 * scale_factor))
+        window_width = max(
+            int(860 * scale_factor),
+            self.grid_max_columns * (self.square_size + 2 * self.grid_pad) + self.scrollbar_allowance + int(18 * scale_factor),
+        )
+        image_frame_width = max(int(300 * scale_factor), window_width - int(12 * scale_factor))
+        self.image_frame_width = image_frame_width
+        self.image_frame_top = int(100 * scale_factor)
         amount_of_rows = ceil(len(brawlers)/10) + 1
-        necessary_height = (int(145 * scale_factor) + amount_of_rows*square_size + (amount_of_rows-1)*int(3 * scale_factor))
+        necessary_height = (int(145 * scale_factor) + amount_of_rows*square_size + (amount_of_rows-1)*self.grid_pad)
         window_height = min(necessary_height, int(820 * scale_factor))
         image_frame_height = max(int(240 * scale_factor), window_height - int(190 * scale_factor))
+        self.image_frame_height = image_frame_height
         self.app.title(f"PylaAi-143 v{pyla_version}")
         self.brawlers = brawlers
 
-        self.app.geometry(f"{str(int(860 * scale_factor))}x{window_height}+{str(int(600 * scale_factor))}")
+        self.app.geometry(f"{window_width}x{window_height}+{str(int(600 * scale_factor))}")
         self.data_setter = data_setter
         self.colors = {
             'gray': "#7d7777",
@@ -105,6 +109,8 @@ class SelectBrawler:
         self._current_filter_text = None
         self._current_sort_mode = "name"
         self._rendered_card_signature = None
+        self._layout_columns = None
+        self._resize_after_id = None
         self._api_data_available = False
         self._selected_only = False
         self._needs_push_only = False
@@ -206,7 +212,14 @@ class SelectBrawler:
             width=image_frame_width,
             height=image_frame_height,
         )
-        self.image_frame.place(x=0, y=int(100 * scale_factor))
+        self.image_frame.place(
+            x=0,
+            y=self.image_frame_top,
+            relwidth=1.0,
+            width=-int(12 * scale_factor),
+            height=image_frame_height,
+        )
+        self.app.bind("<Configure>", self.on_window_resize)
 
         self.update_images("")
         ctk.CTkButton(self.app, text="Start", command=self.start_bot, fg_color=self.colors['ui box gray'],
@@ -263,6 +276,40 @@ class SelectBrawler:
             120,
             lambda: self.update_images(self.filter_var.get(), force=True)
         )
+
+    def on_window_resize(self, event):
+        if self._closing or event.widget is not self.app:
+            return
+        if self._resize_after_id is not None:
+            try:
+                self.app.after_cancel(self._resize_after_id)
+            except Exception:
+                pass
+        self._resize_after_id = self.app.after(120, self._rerender_after_resize)
+
+    def _rerender_after_resize(self):
+        self._resize_after_id = None
+        if self._closing:
+            return
+        columns = self.get_grid_columns()
+        if columns != self._layout_columns:
+            self.update_images(self.filter_var.get(), force=True)
+
+    def get_grid_columns(self):
+        width = self.image_frame_width
+        try:
+            self.image_frame.update_idletasks()
+            canvas = getattr(self.image_frame, "_parent_canvas", None)
+            if canvas is not None:
+                canvas_width = canvas.winfo_width()
+                if canvas_width > 100:
+                    width = canvas_width
+        except Exception:
+            pass
+        available_width = max(1, int(width) - self.scrollbar_allowance)
+        cell_width = max(1, self.square_size + 2 * self.grid_pad)
+        columns = max(1, available_width // cell_width)
+        return max(1, min(self.grid_max_columns, columns))
 
     def on_sort_change(self, value):
         modes = {
@@ -344,7 +391,7 @@ class SelectBrawler:
             pass
 
     def _cancel_queued_callbacks(self):
-        for after_id in (self._filter_after_id, self._image_render_after_id):
+        for after_id in (self._filter_after_id, self._image_render_after_id, self._resize_after_id):
             if after_id is None:
                 continue
             try:
@@ -353,6 +400,7 @@ class SelectBrawler:
                 pass
         self._filter_after_id = None
         self._image_render_after_id = None
+        self._resize_after_id = None
 
     def _hide_window(self):
         try:
@@ -1038,7 +1086,8 @@ class SelectBrawler:
             self.sort_status_label.configure(text="Trophy sorting unavailable: API data not loaded")
         else:
             self.sort_status_label.configure(text="")
-        card_signature = tuple((card.name, card.trophies, card.selected) for card in matches)
+        columns = self.get_grid_columns()
+        card_signature = (columns, tuple((card.name, card.trophies, card.selected) for card in matches))
         if not force and card_signature == self._rendered_card_signature:
             print(
                 "Brawler selector debug:",
@@ -1075,16 +1124,13 @@ class SelectBrawler:
                 card_data = matches[index]
                 brawler = card_data.name
                 img_tk = image_by_brawler[brawler]
-                row_num = index // 10
-                col_num = index % 10
+                row_num = index // columns
+                col_num = index % columns
                 label = ctk.CTkLabel(
                     self.image_frame,
                     image=img_tk,
                     text="",
-                    width=self.square_size,
-                    height=self.square_size,
                     fg_color=self.colors["cherry red"] if card_data.selected else self.colors["ui box gray"],
-                    corner_radius=int(6 * scale_factor),
                 )
                 label._pyla_image_ref = img_tk
                 self.visible_image_labels.append(label)
@@ -1101,6 +1147,7 @@ class SelectBrawler:
                 self._image_render_after_id = self.app.after(1, lambda: render_batch(next_index))
             else:
                 self._image_render_after_id = None
+                self._layout_columns = columns
                 if old_scroll:
                     try:
                         self.image_frame._parent_canvas.yview_moveto(old_scroll[0])
