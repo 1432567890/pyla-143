@@ -1,4 +1,5 @@
 ﻿import json
+import os
 import threading
 import time
 import traceback
@@ -30,6 +31,8 @@ from tkinter import filedialog
 
 from gui.main import install_tk_background_error_filter
 from gui.theme import COLORS, font
+
+RARITY_CONFIG_PATH = "cfg/brawler_rarities.json"
 
 orig_screen_width, orig_screen_height = 1920, 1080
 width, height = pyautogui.size()
@@ -108,7 +111,7 @@ class SelectBrawler:
         self._filter_after_id = None
         self._image_render_after_id = None
         self._current_filter_text = None
-        self._current_sort_mode = "name"
+        self._current_sort_mode = "rarity"
         self._rendered_card_signature = None
         self._layout_columns = None
         self._resize_after_id = None
@@ -118,6 +121,7 @@ class SelectBrawler:
         self._target_trophies = 1000
         self._closing = False
         self._closed = False
+        self.brawler_rarities = self.load_brawler_rarities()
         self._load_cached_trophies()
 
         for brawler in self.brawlers:
@@ -160,10 +164,10 @@ class SelectBrawler:
         self.filter_entry.place(x=search_x, y=int(scale_factor * 52))
         self.filter_var.trace_add("write", lambda *args: self.queue_image_filter_update())
 
-        self.sort_var = tk.StringVar(value="Name")
+        self.sort_var = tk.StringVar(value="Rarity")
         self.sort_menu = ctk.CTkButton(
             self.app,
-            text="Sort: Name",
+            text="Sort: Rarity",
             command=self.open_sort_selector,
             fg_color=self.colors["ui box gray"],
             hover_color=self.colors["dark gray"],
@@ -249,6 +253,31 @@ class SelectBrawler:
             normalize_brawler_name(name): value for name, value in trophies.items()
         }
 
+    def load_brawler_rarities(self):
+        rarities = {}
+        if not os.path.exists(RARITY_CONFIG_PATH):
+            print(f"Brawler selector debug: rarity_config_missing={RARITY_CONFIG_PATH}")
+            return rarities
+        try:
+            with open(RARITY_CONFIG_PATH, "r", encoding="utf-8") as file:
+                raw = json.load(file)
+        except Exception as exc:
+            print(f"GUI error loading brawler rarities: {exc}\n{traceback.format_exc()}")
+            return rarities
+        if not isinstance(raw, dict):
+            print(f"Brawler selector debug: rarity_config_invalid={RARITY_CONFIG_PATH}")
+            return rarities
+        for brawler, rarity in raw.items():
+            normalized = normalize_brawler_name(brawler)
+            if normalized and rarity:
+                rarities[normalized] = str(rarity)
+        print(
+            "Brawler selector debug:",
+            f"rarity_config_loaded={len(rarities)}",
+            f"rarity_config_path={RARITY_CONFIG_PATH}",
+        )
+        return rarities
+
     def _refresh_trophies_async(self):
         def worker():
             try:
@@ -312,18 +341,20 @@ class SelectBrawler:
 
     def on_sort_change(self, value):
         modes = {
+            "Rarity": "rarity",
             "Name": "name",
             "Trophies high -> low": "trophies_desc",
             "Trophies low -> high": "trophies_asc",
         }
-        requested = modes.get(value, "name")
+        requested = modes.get(value, "rarity")
         if requested.startswith("trophies") and not trophy_sort_available(self.api_trophies_by_brawler):
-            self._current_sort_mode = "name"
-            self.sort_var.set("Name")
-            self.sort_menu.configure(text="Sort: Name")
+            self._current_sort_mode = "rarity"
+            self.sort_var.set("Rarity")
+            self.sort_menu.configure(text="Sort: Rarity")
             self.sort_status_label.configure(text="Trophy sorting unavailable: API data not loaded")
         else:
             self._current_sort_mode = requested
+            self.sort_var.set(value)
             self.sort_menu.configure(text=f"Sort: {value}")
             self.sort_status_label.configure(text="")
         self.update_images(self.filter_var.get(), force=True)
@@ -340,7 +371,7 @@ class SelectBrawler:
             font=font(int(18 * scale_factor), "bold"),
             text_color=self.colors["text"],
         ).pack(pady=(int(14 * scale_factor), int(8 * scale_factor)))
-        options = ["Name"]
+        options = ["Rarity", "Name"]
         if trophy_sort_available(self.api_trophies_by_brawler):
             options.extend(["Trophies high -> low", "Trophies low -> high"])
         else:
@@ -1037,6 +1068,7 @@ class SelectBrawler:
             self._needs_push_only,
             tuple(sorted(selected_names_from_rows(self.brawlers_data))),
             self.trophies_source,
+            len(self.brawler_rarities),
         )
         if not force and filter_signature == self._current_filter_text:
             print(
@@ -1060,6 +1092,7 @@ class SelectBrawler:
             [brawler for brawler, _ in self.images],
             self.api_trophies_by_brawler or {},
             selected_names_from_rows(self.brawlers_data),
+            self.brawler_rarities,
         )
         matches = filter_brawler_cards(
             cards,
@@ -1070,13 +1103,14 @@ class SelectBrawler:
             target_trophies=self._target_trophies,
         )
         if self._current_sort_mode.startswith("trophies") and not trophy_sort_available(self.api_trophies_by_brawler):
-            self._current_sort_mode = "name"
-            self.sort_var.set("Name")
+            self._current_sort_mode = "rarity"
+            self.sort_var.set("Rarity")
+            self.sort_menu.configure(text="Sort: Rarity")
             self.sort_status_label.configure(text="Trophy sorting unavailable: API data not loaded")
             matches = filter_brawler_cards(
                 cards,
                 search=filter_text,
-                sort_mode="name",
+                sort_mode="rarity",
                 selected_only=self._selected_only,
                 needs_push_only=self._needs_push_only,
                 target_trophies=self._target_trophies,
@@ -1086,7 +1120,7 @@ class SelectBrawler:
         else:
             self.sort_status_label.configure(text="")
         columns = self.get_grid_columns()
-        card_signature = (columns, tuple((card.name, card.trophies, card.selected) for card in matches))
+        card_signature = (columns, tuple((card.name, card.trophies, card.rarity, card.selected) for card in matches))
         if not force and card_signature == self._rendered_card_signature:
             print(
                 "Brawler selector debug:",

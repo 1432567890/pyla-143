@@ -11,6 +11,31 @@ class BrawlerSelectionFilterTests(unittest.TestCase):
 
         self.assertEqual([card.name for card in filtered], ["colt", "nita", "shelly"])
 
+    def test_default_sort_by_rarity(self):
+        cards = build_brawler_cards(
+            ["spike", "shelly", "colt", "dynamike"],
+            rarities_by_brawler={
+                "spike": "Legendary",
+                "shelly": "Common",
+                "colt": "Rare",
+                "dynamike": "Super Rare",
+            },
+        )
+
+        filtered = filter_brawler_cards(cards, sort_mode="rarity")
+
+        self.assertEqual([card.name for card in filtered], ["shelly", "colt", "dynamike", "spike"])
+
+    def test_unknown_rarity_goes_after_known_rarities(self):
+        cards = build_brawler_cards(
+            ["unknown", "shelly"],
+            rarities_by_brawler={"shelly": "Common"},
+        )
+
+        filtered = filter_brawler_cards(cards, sort_mode="rarity")
+
+        self.assertEqual([card.name for card in filtered], ["shelly", "unknown"])
+
     def test_selected_filter(self):
         cards = build_brawler_cards(["shelly", "colt"], {}, ["colt"])
 
