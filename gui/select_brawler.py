@@ -81,6 +81,7 @@ class SelectBrawler:
             'indian red': "#cd5c5c",
             'bg': '#242424',
             'panel': '#242424',
+            'panel_alt': '#1c1c1c',
             'card': '#242424',
             'card_hover': '#1c1c1c',
             'selected': '#960a00',
