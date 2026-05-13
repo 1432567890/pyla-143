@@ -2714,7 +2714,17 @@ class Play(Movement):
             self.time_since_gadget_checked = current_time
         if current_time - self.time_since_super_checked > self.super_treshold:
             detected = self.check_if_super_ready(frame)
-            self.is_super_ready = self.remember_ability_ready("super", detected, current_time)
+            mem = float(getattr(self, "ability_ready_memory_seconds", 1.25) or 0.0)
+            last_seen = float(getattr(self, "_super_ready_seen_at", 0.0) or 0.0)
+            if detected:
+                self._super_ready_seen_at = current_time
+                self.is_super_ready = True
+            elif last_seen > 0.0 and mem > 0.0 and (current_time - last_seen) <= mem:
+                # HUD color detection flickers between frames; keep latched until memory expires
+                # or clear_ability_ready() zeros _super_ready_seen_at after a super press.
+                self.is_super_ready = True
+            else:
+                self.is_super_ready = False
             self.time_since_super_checked = current_time
 
     @staticmethod
@@ -2764,7 +2774,7 @@ class Play(Movement):
         screenshot = frame[y1:y2, x1:x2]
         yellow_pixels = count_hsv_pixels(screenshot, (17, 170, 200), (27, 255, 255))
         orange_pixels = count_hsv_pixels(screenshot, (8, 120, 150), (38, 255, 255))
-        threshold = self._scaled_pixel_threshold(self.super_pixels_minimum, screenshot, self.super_crop_area) * 2.0
+        threshold = self._scaled_pixel_threshold(self.super_pixels_minimum, screenshot, self.super_crop_area) * 1.5
         if debug:
             print(
                 "super pixels:",

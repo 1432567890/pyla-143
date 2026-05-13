@@ -40,6 +40,7 @@ gadget_pixels_minimum = 1100.0
 hypercharge_pixels_minimum = 1800.0
 super_pixels_minimum = 1800.0
 idle_pixels_minimum = 3000.0
+ability_ready_memory_seconds = 1.25
 wall_detection_confidence = 0.9
 entity_detection_confidence = 0.6
 entity_detection_retry_confidence = 0.35
