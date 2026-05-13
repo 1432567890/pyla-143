@@ -198,6 +198,18 @@ def choose_auto_aim(
             attack_range,
         )
         predicted_distance = math.hypot(predicted[0] - player_pos[0], predicted[1] - player_pos[1])
+        # Lead can push the aim point past attack_range*1.04 even when the enemy
+        # bbox center is well inside range (common in melee). Snap to the live
+        # target instead of rejecting the shot.
+        snap_melee = max(
+            float(dangerous_close_range),
+            float(close_tap_range) * 1.3,
+            float(attack_range) * 0.42,
+        )
+        if predicted_distance > attack_range * 1.04 and distance <= snap_melee:
+            predicted = target
+            predicted_distance = distance
+            lead_distance = 0.0
         if predicted_distance > attack_range * 1.04:
             decision = AutoAimDecision(
                 False,

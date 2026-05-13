@@ -2138,7 +2138,10 @@ class Play(Movement):
 
         vlog(f"showdown movement → angle={angle:.1f}°")
 
-        if enemy_distance <= attack_range:
+        # Small slop: bbox center distance can sit just above attack_range while
+        # the brawler can still hit in practice; auto_aim still enforces real range.
+        attack_window = float(attack_range) * 1.035
+        if enemy_distance <= attack_window:
             enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "attack")
             close_threat = (
                 self.close_range_attack_override
@@ -2150,7 +2153,7 @@ class Play(Movement):
             )
             attack_candidate = enemy_hittable or close_threat
             vlog(
-                f"enemy in attack range (dist={int(enemy_distance)}px, range={attack_range}px), "
+                f"enemy in attack window (dist={int(enemy_distance)}px, window={int(attack_window)}px, range={attack_range}px), "
                 f"hittable={enemy_hittable} close_threat={close_threat}"
             )
             if heal_active and enemy_distance > self.heal_attack_only_close_range:
@@ -2176,7 +2179,7 @@ class Play(Movement):
                         self.attack(touch_up=True, touch_down=False)
                         self.time_since_holding_attack = None
         else:
-            vlog(f"enemy out of attack range (dist={int(enemy_distance)}px, range={attack_range}px)")
+            vlog(f"enemy out of attack window (dist={int(enemy_distance)}px, window={int(attack_window)}px, range={attack_range}px)")
 
         return angle
 

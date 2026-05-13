@@ -161,6 +161,32 @@ class AutoAimTests(unittest.TestCase):
         self.assertTrue(decision.should_fire)
         self.assertLess(decision.distance, 80)
 
+    def test_melee_snaps_prediction_when_lead_overshoots_attack_range(self):
+        """Lead must not reject point-blank shots when bbox is still in range."""
+
+        def track_enemy_velocity(_target, _current_time):
+            return (420.0, 0.0)
+
+        decision = choose_auto_aim(
+            player_pos=(0.0, 0.0),
+            enemy_data=[[72.0, -6.0, 88.0, 6.0]],
+            walls=[],
+            attack_range=320,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=track_enemy_velocity,
+            velocity_confidence=1.0,
+            projectile_speed=900.0,
+            current_time=1.0,
+            min_confidence=0.99,
+            close_tap_range=60,
+            dangerous_close_range=200,
+            close_range_override=True,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertLessEqual(decision.distance or 0.0, 200.0)
+
     def test_close_range_override_lowers_effective_confidence_floor(self):
         decision = choose_auto_aim(
             player_pos=(0, 0),
