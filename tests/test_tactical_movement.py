@@ -4,6 +4,8 @@ from tactical_movement import (
     candidate_dodge_angles,
     classify_dodge_mode,
     movement_keys_to_angle,
+    projectile_threat,
+    score_projectile_dodge_angle,
     score_dodge_angle,
     should_seek_healing,
     threat_level_from_distance,
@@ -49,6 +51,19 @@ class TacticalMovementTests(unittest.TestCase):
         self.assertTrue(should_seek_healing(0.90, active_until=12.0, now=10.0, low_threshold=0.42))
         self.assertTrue(should_seek_healing(0.55, recent_damage=True, now=10.0, low_threshold=0.42))
         self.assertFalse(should_seek_healing(0.85, recent_damage=False, now=10.0, low_threshold=0.42))
+
+    def test_projectile_threat_detects_incoming_trajectory(self):
+        threat = projectile_threat((0, 0), (200, 0), (100, 8), player_radius=20, horizon_seconds=1.0)
+        self.assertIsNotNone(threat)
+        self.assertLess(threat["miss_distance"], 20)
+        self.assertIn(90.0, threat["escape_angles"])
+
+    def test_projectile_dodge_scores_lateral_movement(self):
+        threat = projectile_threat((0, 0), (200, 0), (100, 0), player_radius=20, horizon_seconds=1.0)
+        lateral_score, reasons = score_projectile_dodge_angle(90, threat)
+        forward_score, _ = score_projectile_dodge_angle(0, threat)
+        self.assertGreater(lateral_score, forward_score)
+        self.assertIn("projectile_lateral", reasons)
 
 
 if __name__ == "__main__":

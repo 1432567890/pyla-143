@@ -129,6 +129,53 @@ def candidate_dodge_angles(base_angle, threat_angle):
     return deduped
 
 
+def projectile_threat(projectile_pos, projectile_velocity, player_pos, player_radius=34.0, horizon_seconds=0.75):
+    """Estimate whether a moving projectile will cross the player's hit area."""
+    if projectile_pos is None or projectile_velocity is None or player_pos is None:
+        return None
+    px, py = float(projectile_pos[0]), float(projectile_pos[1])
+    vx, vy = float(projectile_velocity[0]), float(projectile_velocity[1])
+    speed = math.hypot(vx, vy)
+    if speed < 30.0:
+        return None
+
+    tx, ty = float(player_pos[0]), float(player_pos[1])
+    rel_x, rel_y = tx - px, ty - py
+    t = (rel_x * vx + rel_y * vy) / (speed * speed)
+    if t < 0.0 or t > horizon_seconds:
+        return None
+
+    closest_x = px + vx * t
+    closest_y = py + vy * t
+    miss_distance = math.hypot(tx - closest_x, ty - closest_y)
+    if miss_distance > player_radius:
+        return None
+
+    travel_angle = angle_from_vector(vx, vy)
+    if travel_angle is None:
+        return None
+    danger = max(0.0, min(1.0, 1.0 - miss_distance / max(1.0, player_radius)))
+    return {
+        "time_to_impact": t,
+        "miss_distance": miss_distance,
+        "danger": danger,
+        "travel_angle": travel_angle,
+        "escape_angles": ((travel_angle + 90.0) % 360.0, (travel_angle - 90.0) % 360.0),
+    }
+
+
+def score_projectile_dodge_angle(candidate_angle, threat):
+    if not threat:
+        return 0.0, []
+    lateral_1, lateral_2 = threat["escape_angles"]
+    lateral_alignment = max(
+        0.0,
+        120.0 - min(angle_delta(candidate_angle, lateral_1), angle_delta(candidate_angle, lateral_2)),
+    )
+    urgency = 1.0 + max(0.0, 0.55 - float(threat["time_to_impact"])) * 1.8
+    return lateral_alignment * 0.075 * urgency * (0.65 + threat["danger"] * 0.7), ["projectile_lateral"]
+
+
 def should_seek_healing(health_ratio, recent_damage=False, active_until=0.0, now=0.0, low_threshold=0.42):
     if active_until and now < active_until:
         return True

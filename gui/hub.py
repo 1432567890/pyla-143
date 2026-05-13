@@ -13,6 +13,7 @@ from packaging import version
 from performance_profile import apply_performance_profile
 from discord_notifier import async_send_test_notification
 from gui.theme import COLORS, apply_theme, font
+from telegram_notifier import load_telegram_settings
 
 orig_screen_width, orig_screen_height = 1920, 1080
 width, height = pyautogui.size()
@@ -51,6 +52,7 @@ class Hub:
         self.match_history_path = "cfg/match_history.toml"
         self.general_config_path = "cfg/general_config.toml"
         self.webhook_config_path = "cfg/discord_config.toml"
+        self.telegram_config_path = "cfg/telegram_config.toml"
         legacy_webhook_config_path = "cfg/webhook_config.toml"
 
         self.bot_config = load_toml_as_dict(self.bot_config_path)
@@ -62,6 +64,7 @@ class Hub:
             save_dict_as_toml(self.webhook_config, self.webhook_config_path)
         else:
             self.webhook_config = load_toml_as_dict(self.webhook_config_path)
+        self.telegram_config = load_telegram_settings()
 
         # -----------------------------------------------------------------------------------------
         # Defaults
@@ -71,6 +74,7 @@ class Hub:
         self.bot_config.setdefault("gamemode", "brawlball")
         self.bot_config.setdefault("bot_uses_gadgets", "yes")
         self.bot_config.setdefault("minimum_movement_delay", 0.4)
+        self.bot_config.setdefault("close_range_attack_cooldown_multiplier", 0.55)
         self.bot_config.setdefault("wall_detection_confidence", 0.9)
         self.bot_config.setdefault("entity_detection_confidence", 0.6)
         self.bot_config.setdefault("unstuck_movement_delay", 3.0)
@@ -93,6 +97,15 @@ class Hub:
         self.bot_config.setdefault("jump_pad_escape_teammate_safe_distance", 360)
         self.bot_config.setdefault("enable_flicker_retreat", True)
         self.bot_config.setdefault("enable_combat_mans", True)
+        self.bot_config.setdefault("projectile_dodge_enabled", True)
+        self.bot_config.setdefault("projectile_dodge_horizon", 0.75)
+        self.bot_config.setdefault("projectile_dodge_player_radius", 38.0)
+        self.bot_config.setdefault("movement_intent_enabled", True)
+        self.bot_config.setdefault("movement_intent_min_hold_ms", 350)
+        self.bot_config.setdefault("movement_intent_max_hold_ms", 650)
+        self.bot_config.setdefault("movement_intent_switch_score_threshold", 0.18)
+        self.bot_config.setdefault("movement_intent_angle_smoothing", 0.35)
+        self.bot_config.setdefault("movement_intent_debug", "yes")
         self.bot_config.setdefault("enable_joystick_movement", True)
         self.bot_config.setdefault("movement_input_mode", "auto")
         self.bot_config.setdefault("mans_threat_threshold", 0.42)
@@ -152,6 +165,27 @@ class Hub:
         self.webhook_config.setdefault("discord_control_user_id", "")
         self.webhook_config.setdefault("discord_control_channel_id", "")
         self.webhook_config.setdefault("discord_control_guild_id", "")
+        self.telegram_config.setdefault("enabled", False)
+        self.telegram_config.setdefault("bot_token", "")
+        self.telegram_config.setdefault("admin_ids", [])
+        self.telegram_config.setdefault("notification_chat_ids", [])
+        self.telegram_config.setdefault("language", "ru")
+        self.telegram_config.setdefault("send_match_summary", True)
+        self.telegram_config.setdefault("include_screenshot", True)
+        self.telegram_config.setdefault("notify_on_game_finished", True)
+        self.telegram_config.setdefault("notify_on_goal_confirmed", True)
+        self.telegram_config.setdefault("attach_screenshot_on_game_finished", True)
+        self.telegram_config.setdefault("notification_buttons_mode", "minimal")
+        self.telegram_config.setdefault("remote_control_enabled", True)
+        self.telegram_config.setdefault("poll_timeout_seconds", 25)
+        self.telegram_config.setdefault("heartbeat_enabled", False)
+        self.telegram_config.setdefault("heartbeat_interval_sec", 300)
+        self.telegram_config.setdefault("notify_on_start", True)
+        self.telegram_config.setdefault("notify_on_stop", True)
+        self.telegram_config.setdefault("notify_on_error", True)
+        self.telegram_config.setdefault("notify_on_brawler_change", True)
+        self.telegram_config.setdefault("notify_on_config_reload", True)
+        self.telegram_config.setdefault("notify_on_trophy_update", True)
 
         # -----------------------------------------------------------------------------------------
         # Appearance
@@ -215,6 +249,7 @@ class Hub:
         self.tab_overview = self.tabview.add("Overview")
         self.tab_additional = self.tabview.add("Additional Settings")
         self.tab_webhook = self.tabview.add("Discord")
+        self.tab_telegram = self.tabview.add("Telegram")
         self.tab_timers = self.tabview.add("Timers")
         self.tab_history = self.tabview.add("Match History")
 
@@ -222,6 +257,7 @@ class Hub:
         self._init_overview_tab()
         self._init_additional_tab()
         self._init_webhook_tab()
+        self._init_telegram_tab()
         self._init_timers_tab()
         self._init_history_tab()
 
@@ -1261,6 +1297,103 @@ class Hub:
         test_btn.grid(row=row_idx, column=0, columnspan=2, padx=S(20), pady=S(12))
         self.attach_tooltip(test_btn, "Sends a Discord test message using the current Discord settings.")
         row_idx += 1
+
+        container.grid_columnconfigure(0, weight=1)
+        container.grid_columnconfigure(1, weight=1)
+
+        self._add_version_label(frame)
+
+    def _init_telegram_tab(self):
+        frame = self.tab_telegram
+        container = ctk.CTkScrollableFrame(frame, width=S(900), height=S(620), fg_color="transparent")
+        container.pack(expand=True, fill="both")
+
+        row_idx = 0
+
+        def parse_csv(value):
+            if isinstance(value, (list, tuple)):
+                return [str(item).strip() for item in value if str(item).strip()]
+            return [part.strip() for part in str(value or "").replace(";", ",").split(",") if part.strip()]
+
+        def list_to_text(value):
+            if isinstance(value, (list, tuple)):
+                return ", ".join(str(item) for item in value)
+            return str(value or "")
+
+        def save_telegram_config():
+            save_dict_as_toml(self.telegram_config, self.telegram_config_path)
+            print(
+                "Telegram GUI config saved:",
+                f"telegram_enabled={bool(self.telegram_config.get('enabled'))}",
+                f"telegram_token_present={bool(str(self.telegram_config.get('bot_token') or '').strip())}",
+                f"telegram_admin_ids_count={len(self.telegram_config.get('admin_ids') or [])}",
+            )
+
+        def create_entry(label_text, config_key, convert_func=str, width=360, show=None, formatter=str):
+            nonlocal row_idx
+            lbl = ctk.CTkLabel(container, text=label_text, font=font(S(18)))
+            lbl.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
+            var_str = tk.StringVar(value=formatter(self.telegram_config.get(config_key, "")))
+
+            def on_save(*_):
+                val_str = var_str.get().strip()
+                try:
+                    self.telegram_config[config_key] = convert_func(val_str)
+                    save_telegram_config()
+                except ValueError:
+                    var_str.set(formatter(self.telegram_config.get(config_key, "")))
+
+            entry = ctk.CTkEntry(container, textvariable=var_str, width=S(width), font=font(S(16)), show=show)
+            entry.grid(row=row_idx, column=1, sticky="w", padx=S(20), pady=S(10))
+            entry.bind("<FocusOut>", on_save)
+            entry.bind("<Return>", on_save)
+            row_idx += 1
+            return entry
+
+        def create_toggle(label_text, config_key):
+            nonlocal row_idx
+            lbl = ctk.CTkLabel(container, text=label_text, font=font(S(18)))
+            lbl.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
+            var_bool = tk.BooleanVar(value=bool(self.telegram_config.get(config_key, False)))
+
+            def on_toggle():
+                self.telegram_config[config_key] = bool(var_bool.get())
+                save_telegram_config()
+
+            checkbox = ctk.CTkCheckBox(
+                container,
+                text="",
+                variable=var_bool,
+                command=on_toggle,
+                fg_color=COLORS["accent_strong"],
+                hover_color=COLORS["accent"],
+                width=S(30),
+                height=S(30),
+            )
+            checkbox.grid(row=row_idx, column=1, sticky="w", padx=S(20), pady=S(10))
+            row_idx += 1
+
+        create_toggle("Enable Telegram:", "enabled")
+        create_entry("Bot Token:", "bot_token", str, width=440, show="*")
+        create_entry("Admin IDs:", "admin_ids", parse_csv, width=440, formatter=list_to_text)
+        create_entry("Notification Chat IDs:", "notification_chat_ids", parse_csv, width=440, formatter=list_to_text)
+        create_entry("Language:", "language", str, width=120)
+        create_toggle("Remote Control:", "remote_control_enabled")
+        create_toggle("Send Match Summary:", "send_match_summary")
+        create_toggle("Include Screenshot:", "include_screenshot")
+        create_toggle("Attach Game Screenshot:", "attach_screenshot_on_game_finished")
+        create_toggle("Notify On Start:", "notify_on_start")
+        create_toggle("Notify On Stop:", "notify_on_stop")
+        create_toggle("Notify On Error:", "notify_on_error")
+        create_toggle("Notify On Match Finished:", "notify_on_game_finished")
+        create_toggle("Notify On Goal Confirmed:", "notify_on_goal_confirmed")
+        create_toggle("Notify On Brawler Change:", "notify_on_brawler_change")
+        create_toggle("Notify On Config Reload:", "notify_on_config_reload")
+        create_toggle("Notify On Trophy Update:", "notify_on_trophy_update")
+        create_entry("Poll Timeout Seconds:", "poll_timeout_seconds", lambda s: 25 if s == "" else int(s), width=120)
+        create_toggle("Heartbeat:", "heartbeat_enabled")
+        create_entry("Heartbeat Interval Seconds:", "heartbeat_interval_sec", lambda s: 300 if s == "" else int(s), width=120)
+        create_entry("Buttons Mode:", "notification_buttons_mode", str, width=160)
 
         container.grid_columnconfigure(0, weight=1)
         container.grid_columnconfigure(1, weight=1)

@@ -51,11 +51,12 @@ class SelectBrawler:
         amount_of_rows = ceil(len(brawlers)/10) + 1
         necessary_height = (int(145 * scale_factor) + amount_of_rows*square_size + (amount_of_rows-1)*int(3 * scale_factor))
         window_height = min(necessary_height, int(820 * scale_factor))
-        image_frame_height = max(int(240 * scale_factor), window_height - int(190 * scale_factor))
+        window_width = max(int(620 * scale_factor), int(860 * scale_factor))
         self.app.title(f"PylaAi-143 v{pyla_version}")
         self.brawlers = brawlers
 
-        self.app.geometry(f"{str(int(860 * scale_factor))}x{window_height}+{str(int(600 * scale_factor))}")
+        self.app.geometry(f"{window_width}x{window_height}+{str(int(600 * scale_factor))}")
+        self.app.minsize(max(420, int(520 * scale_factor)), max(360, int(420 * scale_factor)))
         self.data_setter = data_setter
         self.colors = {
             'gray': "#7d7777",
@@ -123,31 +124,38 @@ class SelectBrawler:
             f"trophies_source={self.trophies_source}",
         )
 
+        self.app.grid_columnconfigure(0, weight=1)
+        self.app.grid_rowconfigure(1, weight=1)
+
+        header_frame = ctk.CTkFrame(self.app, fg_color=self.colors['ui box gray'])
+        header_frame.grid(row=0, column=0, sticky="ew", padx=int(10 * scale_factor), pady=(int(10 * scale_factor), int(4 * scale_factor)))
+        for col in range(4):
+            header_frame.grid_columnconfigure(col, weight=1 if col == 0 else 0)
+
         self.filter_var = tk.StringVar()
         self.filter_entry = ctk.CTkEntry(
-            self.app, textvariable=self.filter_var,
+            header_frame, textvariable=self.filter_var,
             placeholder_text="Type brawler name...", font=("", int(20 * scale_factor)), width=int(200 * scale_factor),
             fg_color=self.colors['ui box gray'], border_color=self.colors['cherry red'], text_color="white"
         )
         header_text = "Write brawler"
-        search_x = int(330 * scale_factor)
         search_width = int(220 * scale_factor)
         search_label = ctk.CTkLabel(
-            self.app,
+            header_frame,
             text=header_text,
             font=("Comic sans MS", int(20 * scale_factor)),
             text_color=self.colors['cherry red'],
             width=search_width,
             anchor="center",
         )
-        search_label.place(x=search_x, y=int(scale_factor * 18))
+        search_label.grid(row=0, column=0, sticky="ew", padx=(0, int(8 * scale_factor)))
         self.filter_entry.configure(width=search_width)
-        self.filter_entry.place(x=search_x, y=int(scale_factor * 52))
+        self.filter_entry.grid(row=1, column=0, sticky="ew", padx=(0, int(8 * scale_factor)))
         self.filter_var.trace_add("write", lambda *args: self.queue_image_filter_update())
 
         self.sort_var = tk.StringVar(value="Name")
         self.sort_menu = ctk.CTkButton(
-            self.app,
+            header_frame,
             text="Sort: Name",
             command=self.open_sort_selector,
             fg_color=self.colors["ui box gray"],
@@ -158,18 +166,18 @@ class SelectBrawler:
             border_width=int(1 * scale_factor),
             width=int(130 * scale_factor),
         )
-        self.sort_menu.place(x=int(570 * scale_factor), y=int(52 * scale_factor))
+        self.sort_menu.grid(row=1, column=1, sticky="w", padx=int(6 * scale_factor))
         self.sort_status_label = ctk.CTkLabel(
-            self.app,
+            header_frame,
             text="",
             font=font(int(11 * scale_factor)),
             text_color=self.colors["indian red"],
         )
-        self.sort_status_label.place(x=int(570 * scale_factor), y=int(84 * scale_factor))
+        self.sort_status_label.grid(row=2, column=1, sticky="w", padx=int(6 * scale_factor))
 
         self.selected_only_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
-            self.app,
+            header_frame,
             text="Current",
             variable=self.selected_only_var,
             command=self.on_filter_toggle,
@@ -177,11 +185,11 @@ class SelectBrawler:
             hover_color=self.colors["indian red"],
             text_color="white",
             border_color=self.colors["cherry red"],
-        ).place(x=int(710 * scale_factor), y=int(50 * scale_factor))
+        ).grid(row=1, column=2, sticky="w", padx=int(6 * scale_factor))
 
         self.needs_push_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
-            self.app,
+            header_frame,
             text="Below 1000",
             variable=self.needs_push_var,
             command=self.on_filter_toggle,
@@ -189,28 +197,32 @@ class SelectBrawler:
             hover_color=self.colors["indian red"],
             text_color="white",
             border_color=self.colors["cherry red"],
-        ).place(x=int(710 * scale_factor), y=int(76 * scale_factor))
+        ).grid(row=1, column=3, sticky="w", padx=int(6 * scale_factor))
 
         # Frame to hold the images
         self.image_frame = ctk.CTkScrollableFrame(
             self.app,
             fg_color=self.colors['ui box gray'],
-            width=int(845 * scale_factor),
-            height=image_frame_height,
         )
-        self.image_frame.place(x=0, y=int(100 * scale_factor))
+        self.image_frame.grid(row=1, column=0, sticky="nsew", padx=int(6 * scale_factor), pady=int(4 * scale_factor))
+
+        footer_frame = ctk.CTkFrame(self.app, fg_color=self.colors['ui box gray'])
+        footer_frame.grid(row=2, column=0, sticky="ew", padx=int(10 * scale_factor), pady=(int(4 * scale_factor), int(10 * scale_factor)))
+        footer_frame.grid_columnconfigure(0, weight=1)
+        footer_frame.grid_columnconfigure(1, weight=1)
+        footer_frame.grid_columnconfigure(2, weight=1)
 
         self.update_images("")
         ctk.CTkButton(self.app, text="Start", command=self.start_bot, fg_color=self.colors['ui box gray'],
                       text_color="white",
                       font=("Comic sans MS", int(25 * scale_factor)), border_color=self.colors['cherry red'],
-                      border_width=int(2 * scale_factor)).place(x=int(390 * scale_factor), y=int((window_height-60* scale_factor) ))
+                      border_width=int(2 * scale_factor)).grid(in_=footer_frame, row=0, column=1, pady=int(4 * scale_factor))
 
         ctk.CTkButton(self.app, text="Push All", command=self.open_push_all_target_window, fg_color=self.colors['ui box gray'],
                       text_color="white",
                       font=("Comic sans MS", int(25 * scale_factor)), border_color=self.colors['cherry red'],
-                      border_width=int(2 * scale_factor)).place(x=int(10 * scale_factor),
-                                                                y=int((window_height-60* scale_factor) ))
+                      border_width=int(2 * scale_factor)).grid(in_=footer_frame, row=0, column=0, sticky="w", pady=int(4 * scale_factor))
+        self.app.bind("<Configure>", self._on_resize, add="+")
 
         self._refresh_trophies_async()
         self.app.mainloop()
@@ -255,6 +267,19 @@ class SelectBrawler:
             120,
             lambda: self.update_images(self.filter_var.get(), force=True)
         )
+
+    def _on_resize(self, event=None):
+        if event is not None and event.widget is not self.app:
+            return
+        self.queue_image_filter_update()
+
+    def _cards_per_row(self):
+        try:
+            available = self.image_frame.winfo_width()
+        except Exception:
+            available = int(845 * scale_factor)
+        card_span = max(1, int(75 * scale_factor) + int(8 * scale_factor))
+        return max(1, available // card_span)
 
     def on_sort_change(self, value):
         modes = {
@@ -980,6 +1005,7 @@ class SelectBrawler:
             self._current_sort_mode,
             self._selected_only,
             self._needs_push_only,
+            self._cards_per_row(),
             tuple(sorted(selected_names_from_rows(self.brawlers_data))),
             self.trophies_source,
         )
@@ -1067,8 +1093,9 @@ class SelectBrawler:
                 card_data = matches[index]
                 brawler = card_data.name
                 img_tk = image_by_brawler[brawler]
-                row_num = index // 10
-                col_num = index % 10
+                columns = self._cards_per_row()
+                row_num = index // columns
+                col_num = index % columns
                 label = ctk.CTkLabel(
                     self.image_frame,
                     image=img_tk,

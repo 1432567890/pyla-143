@@ -93,8 +93,8 @@ def run_window(state_path):
     ctk.set_appearance_mode("dark")
 
     root = ctk.CTk()
-    root.title("Pyla 143 Control")
-    root.geometry("340x285")
+    root.title("PylaAi-XXZ Control")
+    root.geometry("280x170")
     root.resizable(False, False)
     root.attributes("-topmost", True)
     owner_pid = None
@@ -106,13 +106,13 @@ def run_window(state_path):
     status_var = tk.StringVar(value="Running")
     button_var = tk.StringVar(value="Pause Bot")
 
-    card = ctk.CTkFrame(root, fg_color="#151D27", corner_radius=8, border_color="#2D3A4D", border_width=1)
+    card = ctk.CTkFrame(root, fg_color="#242424", corner_radius=8)
     card.pack(fill="both", expand=True, padx=12, pady=12)
 
     title = ctk.CTkLabel(
         card,
-        text="Pyla 143 Bot Control",
-        text_color="#EEF4FA",
+        text="PylaAi-XXZ Bot Control",
+        text_color="#FFFFFF",
         font=("Arial", 17, "bold"),
     )
     title.pack(pady=(14, 2))
@@ -120,7 +120,7 @@ def run_window(state_path):
     status_label = ctk.CTkLabel(
         card,
         textvariable=status_var,
-        text_color="#34D399",
+        text_color="#2FCE66",
         font=("Arial", 14, "bold"),
     )
     status_label.pack(pady=(0, 12))
@@ -131,11 +131,11 @@ def run_window(state_path):
             return
         paused = read_state(state_path) == PAUSED
         status_var.set("Paused" if paused else "Running")
-        button_var.set("Resume" if paused else "Pause")
-        status_label.configure(text_color="#F59E0B" if paused else "#34D399")
+        button_var.set("Resume Bot" if paused else "Pause Bot")
+        status_label.configure(text_color="#FFB23F" if paused else "#2FCE66")
         pause_button.configure(
-            fg_color="#2563EB" if paused else "#1B2633",
-            hover_color="#3B82F6" if paused else "#223044",
+            fg_color="#2F8F4E" if paused else "#AA2A2A",
+            hover_color="#3DAF62" if paused else "#BB3A3A",
         )
 
     def root_exists():
@@ -155,22 +155,6 @@ def run_window(state_path):
         write_state(state_path, RUNNING if read_state(state_path) == PAUSED else PAUSED)
         refresh()
 
-    def stop_safely():
-        write_state(state_path, STOPPED)
-        refresh()
-
-    def request_reload():
-        write_state(state_path, RELOAD_REQUESTED)
-        refresh()
-
-    def request_change_brawler():
-        write_state(state_path, CHANGE_BRAWLER_REQUESTED)
-        refresh()
-
-    def request_open_stats():
-        write_state(state_path, OPEN_STATS_REQUESTED)
-        refresh()
-
     def on_close():
         write_state(state_path, RUNNING)
         root.destroy()
@@ -179,40 +163,20 @@ def run_window(state_path):
         card,
         textvariable=button_var,
         command=toggle_pause,
-        width=230,
+        width=170,
         height=40,
         corner_radius=8,
-        fg_color="#1B2633",
-        hover_color="#223044",
-        text_color="#EEF4FA",
+        fg_color="#AA2A2A",
+        hover_color="#BB3A3A",
+        text_color="#FFFFFF",
         font=("Arial", 15, "bold"),
     )
     pause_button.pack(pady=(0, 8))
 
-    actions = [
-        ("Stop safely", stop_safely, "#FB7185"),
-        ("Reload config", request_reload, "#22D3EE"),
-        ("Change brawler", request_change_brawler, "#60A5FA"),
-        ("Open stats", request_open_stats, "#34D399"),
-    ]
-    for label, command, color in actions:
-        ctk.CTkButton(
-            card,
-            text=label,
-            command=command,
-            width=230,
-            height=30,
-            corner_radius=8,
-            fg_color="#1B2633",
-            hover_color="#223044",
-            text_color=color,
-            font=("Arial", 13, "bold"),
-        ).pack(pady=(0, 6))
-
     hint = ctk.CTkLabel(
         card,
-        text="GUI and Telegram share this runtime state.",
-        text_color="#9AA8B7",
+        text="Movement stops instantly while paused.",
+        text_color="#BEBEBE",
         font=("Arial", 11),
     )
     hint.pack()

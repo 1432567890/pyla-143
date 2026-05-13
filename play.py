@@ -10,11 +10,19 @@ import numpy as np
 from state_finder import get_state
 from auto_aim import choose_auto_aim, detect_aim_line_angle
 from detect import Detect
+from movement_intent import (
+    MovementIntentMemory,
+    build_movement_intent,
+    build_threat_state,
+    smooth_intent,
+)
 from tactical_movement import (
     candidate_dodge_angles,
     classify_dodge_mode,
     movement_keys_to_angle,
+    projectile_threat,
     score_dodge_angle,
+    score_projectile_dodge_angle,
     should_seek_healing,
     threat_level_from_distance,
 )
@@ -64,6 +72,7 @@ class Movement:
         self.is_hypercharge_ready = False
         self.window_controller = window_controller
         self.attack_cooldown = float(bot_config.get("attack_cooldown", 0.12))
+        self.close_range_attack_cooldown_multiplier = float(bot_config.get("close_range_attack_cooldown_multiplier", 0.55))
         self.last_attack_time = 0.0
         self.TILE_SIZE = 60
         # Wall-based stuck detector: samples wall bboxes on an interval, ignores
@@ -142,6 +151,7 @@ class Movement:
         self._flicker_state = {"active_until": 0.0, "last_trigger": 0.0, "confidence": 0.0}
         self._heal_state = {"active_until": 0.0, "last_health_ratio": None, "reason": ""}
         self._dodge_state = {"angle": None, "mode": "no_dodge", "score": 0.0, "until": 0.0}
+        self._projectile_track = {}
         self._suppress_attack_until = 0.0
         self._last_aim_attempt_time = 0.0
         self._enemy_track = {}
@@ -162,6 +172,16 @@ class Movement:
         self.movement_input_mode = str(bot_config.get("movement_input_mode", "auto")).strip().lower()
         self.enable_joystick_movement = str(bot_config.get("enable_joystick_movement", "true")).lower() in ("yes", "true", "1")
         self._movement_fallback_to_wasd = False
+        self.projectile_dodge_enabled = str(bot_config.get("projectile_dodge_enabled", "true")).lower() in ("yes", "true", "1")
+        self.projectile_dodge_horizon = float(bot_config.get("projectile_dodge_horizon", 0.75))
+        self.projectile_dodge_player_radius = float(bot_config.get("projectile_dodge_player_radius", 38.0))
+        self.movement_intent_enabled = str(bot_config.get("movement_intent_enabled", "true")).lower() in ("yes", "true", "1")
+        self.movement_intent_min_hold_ms = float(bot_config.get("movement_intent_min_hold_ms", 350))
+        self.movement_intent_max_hold_ms = float(bot_config.get("movement_intent_max_hold_ms", 650))
+        self.movement_intent_switch_score_threshold = float(bot_config.get("movement_intent_switch_score_threshold", 0.18))
+        self.movement_intent_angle_smoothing = float(bot_config.get("movement_intent_angle_smoothing", 0.35))
+        self.movement_intent_debug = str(bot_config.get("movement_intent_debug", "yes")).lower() in ("yes", "true", "1")
+        self._movement_intent_memory = MovementIntentMemory()
         
     @staticmethod
     def get_enemy_pos(enemy):
@@ -193,10 +213,11 @@ class Movement:
             return "W" if direction_y > 0 else "S"
         return "S" if direction_y > 0 else "W"
 
-    def attack(self, touch_up=True, touch_down=True):
-        if touch_up and touch_down and self.attack_cooldown > 0:
+    def attack(self, touch_up=True, touch_down=True, cooldown_multiplier=1.0):
+        effective_cooldown = max(0.0, self.attack_cooldown * float(cooldown_multiplier))
+        if touch_up and touch_down and effective_cooldown > 0:
             current_time = time.time()
-            if current_time - self.last_attack_time < self.attack_cooldown:
+            if current_time - self.last_attack_time < effective_cooldown:
                 return False
             self.last_attack_time = current_time
         self.window_controller.press_key("M", touch_up=touch_up, touch_down=touch_down)
@@ -276,12 +297,16 @@ class Movement:
         if not decision.should_fire:
             self._aimlog(f"attack_denied_reason={decision.reason}")
             return False
+        cooldown_multiplier = 1.0
+        if decision.close_range_override or decision.use_tap:
+            cooldown_multiplier = max(0.25, min(1.0, getattr(self, "close_range_attack_cooldown_multiplier", 0.55)))
         if decision.use_tap:
-            return self.attack()
-        if self.attack_cooldown > 0:
+            return self.attack(cooldown_multiplier=cooldown_multiplier)
+        effective_cooldown = max(0.0, self.attack_cooldown * cooldown_multiplier)
+        if effective_cooldown > 0:
             current_time = time.time()
-            if current_time - self.last_attack_time < self.attack_cooldown:
-                remaining = max(0.0, self.attack_cooldown - (current_time - self.last_attack_time))
+            if current_time - self.last_attack_time < effective_cooldown:
+                remaining = max(0.0, effective_cooldown - (current_time - self.last_attack_time))
                 self._aimlog(
                     "attack_decision "
                     f"attack_allowed=False attack_denied_reason=attack_on_cooldown "
@@ -289,7 +314,8 @@ class Movement:
                     f"selected_target={target_s} closest_enemy_distance={dist_s} attack_range={int(attack_range)} "
                     f"confidence={decision.confidence:.2f} confidence_threshold={decision.threshold:.2f} "
                     f"close_range_override={decision.close_range_override} line_of_sight={decision.los_status} "
-                    f"input_busy=True aim_frequency_hz={aim_frequency_hz:.2f}"
+                    f"input_busy=True aim_frequency_hz={aim_frequency_hz:.2f} "
+                    f"cooldown_multiplier={cooldown_multiplier:.2f}"
                 )
                 return False
             self.last_attack_time = current_time
@@ -1539,8 +1565,9 @@ class Play(Movement):
             attack_range,
             current_time,
             flicker_active=False,
+            projectile_data=None,
     ):
-        if not self.enable_combat_mans or not enemy_data:
+        if not getattr(self, "enable_combat_mans", True) or not enemy_data:
             return base_angle, {"mode": "no_dodge", "threat": 0.0, "reason": "disabled_or_no_enemy"}
 
         closest_enemy = None
@@ -1557,6 +1584,13 @@ class Play(Movement):
         threat = threat_level_from_distance(closest_distance, attack_range, safe_range)
         if flicker_active:
             threat = max(threat, 0.50)
+        projectile = self.select_incoming_projectile_threat(
+            projectile_data or [],
+            player_pos,
+            current_time,
+        )
+        if projectile:
+            threat = max(threat, 0.72 + projectile["danger"] * 0.24)
         if threat < self.mans_threat_threshold and not flicker_active:
             return base_angle, {
                 "mode": "no_dodge",
@@ -1588,6 +1622,9 @@ class Play(Movement):
                 current_angle=self._dodge_state.get("angle"),
                 teammate_angle=teammate_angle,
             )
+            projectile_score, projectile_reasons = score_projectile_dodge_angle(candidate, projectile)
+            score += projectile_score
+            reasons.extend(projectile_reasons)
             if score < -900:
                 rejected.append((round(candidate, 1), reasons[0] if reasons else "rejected"))
                 continue
@@ -1623,10 +1660,13 @@ class Play(Movement):
                 current_angle=current_angle,
                 teammate_angle=teammate_angle,
             )
+            projectile_score, _ = score_projectile_dodge_angle(current_angle, projectile)
+            current_score += projectile_score
             if current_safe and best_score - current_score < 1.2:
                 self._manslog(
                     f"dodge_mode={mode} threat_level={threat:.2f} selected_dodge_vector={current_angle:.1f} "
                     f"dodge_score={current_score:.2f} closest_enemy_distance={int(closest_distance)} "
+                    f"incoming_projectile_detected={bool(projectile)} "
                     "keeping_current_direction_due_to_hysteresis=True combined_with_auto_aim=True"
                 )
                 return current_angle, {
@@ -1647,7 +1687,8 @@ class Play(Movement):
         self._manslog(
             f"dodge_mode={mode} threat_level={threat:.2f} selected_dodge_vector={best_angle:.1f} "
             f"dodge_score={best_score:.2f} reason={'+'.join(reasons)} rejected_directions={rejected} "
-            f"closest_enemy_distance={int(closest_distance)} incoming_projectile_detected=False "
+            f"closest_enemy_distance={int(closest_distance)} incoming_projectile_detected={bool(projectile)} "
+            f"projectile_tti={None if not projectile else round(projectile['time_to_impact'], 2)} "
             "combined_with_auto_aim=True"
         )
         return best_angle, {
@@ -1657,7 +1698,232 @@ class Play(Movement):
             "score": best_score,
             "reason": "+".join(reasons),
             "rejected": rejected,
+            "projectile": projectile,
         }
+
+    def select_incoming_projectile_threat(self, projectile_data, player_pos, current_time):
+        if not getattr(self, "projectile_dodge_enabled", False) or not projectile_data:
+            return None
+        best = None
+        for projectile in projectile_data:
+            center = self.get_enemy_pos(projectile)
+            velocity = self.track_projectile_velocity(center, current_time)
+            threat = projectile_threat(
+                center,
+                velocity,
+                player_pos,
+                player_radius=self.projectile_dodge_player_radius,
+                horizon_seconds=self.projectile_dodge_horizon,
+            )
+            if not threat:
+                continue
+            threat["projectile_pos"] = center
+            threat["projectile_velocity"] = velocity
+            if best is None or (threat["danger"], -threat["time_to_impact"]) > (best["danger"], -best["time_to_impact"]):
+                best = threat
+        if best:
+            self._manslog(
+                "projectile_threat "
+                f"pos={tuple(map(int, best['projectile_pos']))} "
+                f"velocity=({best['projectile_velocity'][0]:.1f},{best['projectile_velocity'][1]:.1f}) "
+                f"time_to_impact={best['time_to_impact']:.2f} miss_distance={best['miss_distance']:.1f} "
+                f"danger={best['danger']:.2f}"
+            )
+        return best
+
+    def track_projectile_velocity(self, projectile_coords, current_time):
+        if not hasattr(self, "_projectile_track"):
+            self._projectile_track = {}
+        grid = 18
+        rounded_key = (round(projectile_coords[0] / grid) * grid, round(projectile_coords[1] / grid) * grid)
+        best_key = None
+        best_dist = float("inf")
+        for key, item in list(self._projectile_track.items()):
+            age = current_time - item["time"]
+            if age > 0.8:
+                self._projectile_track.pop(key, None)
+                continue
+            dist = (key[0] - rounded_key[0]) ** 2 + (key[1] - rounded_key[1]) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best_key = key
+        if best_key is None:
+            self._projectile_track[rounded_key] = {"pos": projectile_coords, "time": current_time}
+            return 0.0, 0.0
+        previous = self._projectile_track.pop(best_key)
+        dt = max(0.001, current_time - previous["time"])
+        vx = max(-2200.0, min(2200.0, (projectile_coords[0] - previous["pos"][0]) / dt))
+        vy = max(-2200.0, min(2200.0, (projectile_coords[1] - previous["pos"][1]) / dt))
+        self._projectile_track[rounded_key] = {"pos": projectile_coords, "time": current_time}
+        return vx, vy
+
+    def _intentlog(self, tag, *parts):
+        if visual_debug or getattr(self, "movement_intent_debug", False):
+            print(f"[{tag}]", *parts)
+
+    def choose_projectile_escape_angle(self, projectile, player_pos, walls, fallback_angle):
+        if not projectile:
+            return None
+        candidates = list(projectile.get("escape_angles") or [])
+        if fallback_angle is not None:
+            candidates.extend([(fallback_angle + 25.0) % 360.0, (fallback_angle - 25.0) % 360.0])
+        best = None
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            safe, reason = self._angle_safe_for_tactical_move(player_pos, candidate, walls)
+            dodge_score, dodge_reasons = score_projectile_dodge_angle(candidate, projectile)
+            if not safe:
+                self._intentlog(
+                    "DODGE",
+                    f"will_intersect=True dodge_angle={candidate:.1f} safe=False reason={reason}",
+                )
+                continue
+            lane_bonus = 0.0
+            if fallback_angle is not None:
+                lane_bonus = max(0.0, 60.0 - abs((candidate - fallback_angle + 180.0) % 360.0 - 180.0)) * 0.01
+            score = dodge_score + lane_bonus
+            if best is None or score > best[0]:
+                best = (score, candidate, "+".join(dodge_reasons) or "projectile_lateral")
+        if best is None:
+            return None
+        _, angle, reason = best
+        self._intentlog(
+            "DODGE",
+            f"will_intersect=True dodge_angle={angle:.1f} safe=True reason={reason}",
+        )
+        return angle
+
+    def apply_movement_intent(
+            self,
+            *,
+            base_angle,
+            player_pos,
+            enemy_coords,
+            enemy_distance,
+            enemy_data,
+            teammate_data,
+            walls,
+            safe_range,
+            attack_range,
+            fog_flee_angle,
+            health_ratio,
+            heal_active,
+            projectile_data,
+            current_time,
+    ):
+        if not getattr(self, "movement_intent_enabled", False):
+            return base_angle, True, None
+
+        enemy_visible = enemy_coords is not None and enemy_distance is not None
+        vector_to_enemy = (0.0, 0.0)
+        toward_enemy_angle = None
+        away_enemy_angle = None
+        strafe_angle = None
+        enemy_has_line = False
+        attack_lane_available = False
+        nearby_enemy_count = 0
+        if enemy_visible:
+            vector_to_enemy = (enemy_coords[0] - player_pos[0], enemy_coords[1] - player_pos[1])
+            toward_enemy_angle = self.angle_from_direction(vector_to_enemy[0], vector_to_enemy[1])
+            away_enemy_angle = self.angle_opposite(toward_enemy_angle)
+            strafe_angle = self.get_strafe_angle(toward_enemy_angle, current_time, enemy_distance, safe_range)
+            enemy_has_line = self.is_enemy_hittable(player_pos, enemy_coords, walls, "attack")
+            attack_lane_available = enemy_has_line and enemy_distance <= attack_range * 1.035
+            nearby_enemy_count = sum(
+                1 for enemy in (enemy_data or [])
+                if self.get_distance(self.get_enemy_pos(enemy), player_pos) <= attack_range
+            )
+
+        closest_teammate, teammate_distance = self.get_closest_teammate(
+            (player_pos[0], player_pos[1], player_pos[0], player_pos[1]),
+            teammate_data,
+        )
+        teammate_angle = None
+        if closest_teammate is not None:
+            teammate_angle = self.angle_from_direction(
+                closest_teammate[0] - player_pos[0],
+                closest_teammate[1] - player_pos[1],
+            )
+
+        projectile = self.select_incoming_projectile_threat(projectile_data or [], player_pos, current_time)
+        projectile_escape_angle = self.choose_projectile_escape_angle(projectile, player_pos, walls, base_angle)
+        threat = build_threat_state(
+            closest_enemy_distance=enemy_distance,
+            safe_range=safe_range,
+            attack_range=attack_range,
+            enemy_velocity=getattr(self, "enemy_velocity", (0.0, 0.0)),
+            vector_to_enemy=vector_to_enemy,
+            enemy_has_line=enemy_has_line,
+            projectile=projectile if projectile_escape_angle is not None else None,
+            fog_danger=fog_flee_angle is not None,
+            nearby_enemy_count=nearby_enemy_count,
+            health_ratio=health_ratio,
+            teammate_distance=teammate_distance,
+            teammate_near_range=getattr(self, "teammate_combat_regroup_distance", 650),
+            wall_pressure=self.is_path_blocked_angle(player_pos, base_angle, walls),
+            attack_lane_available=attack_lane_available,
+        )
+        self._intentlog(
+            "THREAT_MODEL",
+            f"total={threat.total_score:.2f}",
+            f"projectile={threat.projectile_incoming}",
+            f"fog={threat.fog_danger}",
+            f"low_hp={threat.low_hp}",
+            f"enemy_close={threat.enemy_close}",
+            f"reasons={','.join(threat.reasons)}",
+        )
+
+        heal_angle = None
+        if heal_active:
+            heal_angle, _ = self.choose_heal_retreat_angle(player_pos, enemy_data, teammate_data, walls, base_angle)
+
+        raw_intent = build_movement_intent(
+            threat=threat,
+            base_angle=base_angle,
+            enemy_visible=enemy_visible,
+            enemy_distance=enemy_distance,
+            safe_range=safe_range,
+            attack_range=attack_range,
+            toward_enemy_angle=toward_enemy_angle,
+            away_enemy_angle=away_enemy_angle,
+            strafe_angle=strafe_angle,
+            projectile_escape_angle=projectile_escape_angle,
+            fog_escape_angle=fog_flee_angle,
+            teammate_angle=teammate_angle,
+            heal_retreat_angle=heal_angle,
+        )
+
+        safe_angle = self.find_best_angle(player_pos, raw_intent.angle, walls)
+        if self.angle_points_into_fog(self.current_frame, player_pos, safe_angle) and fog_flee_angle is None:
+            fallback = self.find_best_angle(player_pos, self.angle_opposite(safe_angle), walls)
+            raw_intent.angle = fallback
+            raw_intent.reasons.append("intent_fog_guard")
+        else:
+            raw_intent.angle = safe_angle
+
+        memory = getattr(self, "_movement_intent_memory", MovementIntentMemory())
+        new_memory, intent, smoothing_reason = smooth_intent(
+            memory,
+            raw_intent,
+            now=current_time,
+            min_hold_ms=getattr(self, "movement_intent_min_hold_ms", 350),
+            max_hold_ms=getattr(self, "movement_intent_max_hold_ms", 650),
+            switch_score_threshold=getattr(self, "movement_intent_switch_score_threshold", 0.18),
+            angle_smoothing=getattr(self, "movement_intent_angle_smoothing", 0.35),
+        )
+        self._movement_intent_memory = new_memory
+        if smoothing_reason != "switched" and smoothing_reason != "new_intent":
+            self._intentlog("SMOOTHING", f"keeping_previous_intent reason={smoothing_reason}")
+        self._intentlog(
+            "MOVEMENT_INTENT",
+            f"mode={intent.mode}",
+            f"angle={intent.angle:.1f}",
+            f"score={intent.score:.2f}",
+            f"attack_allowed={str(intent.attack_allowed).lower()}",
+            f"reasons={','.join(intent.reasons)}",
+        )
+        return intent.angle, intent.attack_allowed, intent
 
     def choose_flicker_retreat_angle(
             self,
@@ -1900,7 +2166,7 @@ class Play(Movement):
         vlog(f"follow teammate: all paths blocked -> forcing angle={float(angle):.1f}°")
         return angle
 
-    def get_showdown_movement(self, player_data, enemy_data, teammate_data, walls, brawler, jump_pads=None):
+    def get_showdown_movement(self, player_data, enemy_data, teammate_data, walls, brawler, jump_pads=None, projectile_data=None):
         """Showdown movement using analog joystick angles.
 
         Always returns a float angle in degrees (0–360).
@@ -2092,6 +2358,7 @@ class Play(Movement):
                 attack_range,
                 time.time(),
                 flicker_active=flicker_active,
+                projectile_data=projectile_data,
             )
 
         if (
@@ -2130,6 +2397,23 @@ class Play(Movement):
                 angle = self.find_best_angle(player_pos, fog_flee_angle, walls)
                 vlog(f"showdown: fog override → angle={angle:.1f}°")
 
+        angle, intent_attack_allowed, movement_intent = self.apply_movement_intent(
+            base_angle=angle,
+            player_pos=player_pos,
+            enemy_coords=enemy_coords,
+            enemy_distance=enemy_distance,
+            enemy_data=enemy_data,
+            teammate_data=teammate_data,
+            walls=walls,
+            safe_range=safe_range,
+            attack_range=attack_range,
+            fog_flee_angle=jump_pad_flee_angle,
+            health_ratio=health_ratio,
+            heal_active=heal_active,
+            projectile_data=projectile_data,
+            current_time=time.time(),
+        )
+
         # --- Skills (only when an attackable enemy was found) ---
         if enemy_coords is None:
             return angle
@@ -2162,6 +2446,13 @@ class Play(Movement):
                     "attack_decision attack_allowed=False attack_denied_reason=healing_retreat "
                     f"closest_enemy_distance={int(enemy_distance)} heal_attack_only_close_range={int(self.heal_attack_only_close_range)} "
                     f"health_ratio={health_ratio}"
+                )
+            if not intent_attack_allowed and not close_threat:
+                attack_candidate = False
+                self._aimlog(
+                    "attack_decision attack_allowed=False attack_denied_reason=movement_intent_blocks_attack "
+                    f"movement_intent={movement_intent.mode if movement_intent else 'disabled'} "
+                    f"closest_enemy_distance={int(enemy_distance)}"
                 )
             if attack_candidate and time.time() >= getattr(self, "_suppress_attack_until", 0.0):
                 if self.should_use_gadget_on_enemy(brawler, player_data, enemy_data, walls):
@@ -2440,6 +2731,10 @@ class Play(Movement):
 
         if 'jump_pad' not in data.keys() or not data['jump_pad']:
             data['jump_pad'] = []
+        if 'projectile' not in data.keys() or not data['projectile']:
+            data['projectile'] = []
+        if 'bullet' in data and data['bullet']:
+            data['projectile'].extend(data['bullet'])
 
         return False if incomplete else data
 
@@ -2546,6 +2841,7 @@ class Play(Movement):
                 walls=data['wall'],
                 brawler=brawler,
                 jump_pads=data.get('jump_pad') or [],
+                projectile_data=data.get('projectile') or [],
             )
             strict_following = (
                 self.showdown_playstyle_mode in ("follow", "follower", "team", "teammate", "teammates")
@@ -2654,11 +2950,25 @@ class Play(Movement):
         super_type = brawler_info['super_type']
         _, attack_range, super_range = self.get_brawler_range(brawler)
         enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "super")
+        near_range = min(max(super_range, attack_range * 0.75), attack_range)
         if not self.should_use_super_on_enemy(
                 brawler, super_type, enemy_distance, attack_range, super_range, enemy_hittable
         ):
+            self._aimlog(
+                "super_decision "
+                f"use_super=False reason=low_value super_type={super_type} "
+                f"enemy_distance={int(enemy_distance)} attack_range={int(attack_range)} "
+                f"super_range={int(super_range)} near_range={int(near_range)} "
+                f"enemy_hittable={enemy_hittable}"
+            )
             return False
 
+        self._aimlog(
+            "super_decision "
+            f"use_super=True reason=valuable_{super_type}_opportunity "
+            f"enemy_distance={int(enemy_distance)} attack_range={int(attack_range)} "
+            f"super_range={int(super_range)} enemy_hittable={enemy_hittable}"
+        )
         self.release_held_attack_for_super()
         if self.is_hypercharge_ready:
             self.use_hypercharge()
