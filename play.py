@@ -195,6 +195,32 @@ class Movement:
     def get_distance(enemy_coords, player_coords):
         return math.hypot(enemy_coords[0] - player_coords[0], enemy_coords[1] - player_coords[1])
 
+    def closest_enemy_distance(self, player_pos, enemy_data):
+        if not player_pos or not enemy_data:
+            return None
+        distances = []
+        for enemy in enemy_data:
+            try:
+                distances.append(self.get_distance(self.get_enemy_pos(enemy), player_pos))
+            except (TypeError, IndexError):
+                continue
+        return min(distances) if distances else None
+
+    def close_attack_threat_threshold(self, attack_range):
+        range_part = float(attack_range or 0) * 0.60
+        return max(
+            float(getattr(self, "dangerous_close_range", 0) or 0),
+            float(getattr(self, "auto_aim_close_tap_range", 0) or 0),
+            range_part,
+        )
+
+    def is_close_attack_threat(self, enemy_distance, attack_range):
+        if not getattr(self, "close_range_attack_override", True):
+            return False
+        if enemy_distance is None:
+            return False
+        return float(enemy_distance) <= self.close_attack_threat_threshold(attack_range)
+
     @staticmethod
     def is_there_enemy(enemy_data):
         if not enemy_data:
@@ -245,7 +271,11 @@ class Movement:
         elapsed = now - getattr(self, "_last_aim_attempt_time", 0.0)
         aim_frequency_hz = 0.0 if elapsed <= 0 else min(99.0, 1.0 / elapsed)
         self._last_aim_attempt_time = now
-        if now < getattr(self, "_suppress_attack_until", 0.0):
+        if attack_range is None:
+            _, attack_range, _ = self.get_brawler_range(brawler)
+        closest_enemy_distance = self.closest_enemy_distance(player_pos, enemy_data)
+        close_threat_visible = self.is_close_attack_threat(closest_enemy_distance, attack_range)
+        if now < getattr(self, "_suppress_attack_until", 0.0) and not close_threat_visible:
             remaining = int((getattr(self, "_suppress_attack_until", 0.0) - now) * 1000)
             self._aimlog(
                 "aim_attempt "
@@ -254,8 +284,15 @@ class Movement:
                 f"input_busy=True aim_frequency_hz={aim_frequency_hz:.2f}"
             )
             return False
-        if attack_range is None:
-            _, attack_range, _ = self.get_brawler_range(brawler)
+        if now < getattr(self, "_suppress_attack_until", 0.0) and close_threat_visible:
+            remaining = int((getattr(self, "_suppress_attack_until", 0.0) - now) * 1000)
+            self._aimlog(
+                "aim_attempt "
+                f"attack_allowed=True attack_reason=close_enemy_overrides_defensive_retreat "
+                f"cooldown_remaining_ms={remaining} closest_enemy_distance={int(closest_enemy_distance)} "
+                f"close_threshold={int(self.close_attack_threat_threshold(attack_range))} "
+                f"visible_enemy_count={len(enemy_data or [])} aim_frequency_hz={aim_frequency_hz:.2f}"
+            )
         can_ignore_walls = self.can_attack_through_walls(brawler, "attack", self.brawlers_info)
         aim_line_angle = detect_aim_line_angle(getattr(self, "current_frame", None), player_pos)
         close_tap_range = getattr(self, "auto_aim_close_tap_range", 0)
@@ -2427,24 +2464,24 @@ class Play(Movement):
         attack_window = float(attack_range) * 1.035
         if enemy_distance <= attack_window:
             enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "attack")
-            close_threat = (
-                self.close_range_attack_override
-                and enemy_distance <= max(
-                    self.dangerous_close_range,
-                    self.auto_aim_close_tap_range,
-                    attack_range * 0.45,
-                )
-            )
+            close_threat = self.is_close_attack_threat(enemy_distance, attack_range)
             attack_candidate = enemy_hittable or close_threat
             vlog(
                 f"enemy in attack window (dist={int(enemy_distance)}px, window={int(attack_window)}px, range={attack_range}px), "
-                f"hittable={enemy_hittable} close_threat={close_threat}"
+                f"hittable={enemy_hittable} close_threat={close_threat} "
+                f"close_threshold={int(self.close_attack_threat_threshold(attack_range))}"
             )
-            if heal_active and enemy_distance > self.heal_attack_only_close_range:
+            if heal_active and enemy_distance > self.heal_attack_only_close_range and not close_threat:
                 attack_candidate = False
                 self._aimlog(
                     "attack_decision attack_allowed=False attack_denied_reason=healing_retreat "
                     f"closest_enemy_distance={int(enemy_distance)} heal_attack_only_close_range={int(self.heal_attack_only_close_range)} "
+                    f"health_ratio={health_ratio}"
+                )
+            elif heal_active and close_threat:
+                self._aimlog(
+                    "attack_decision attack_allowed=True attack_reason=close_enemy_overrides_healing_retreat "
+                    f"closest_enemy_distance={int(enemy_distance)} close_threshold={int(self.close_attack_threat_threshold(attack_range))} "
                     f"health_ratio={health_ratio}"
                 )
             if not intent_attack_allowed and not close_threat:
@@ -2454,7 +2491,14 @@ class Play(Movement):
                     f"movement_intent={movement_intent.mode if movement_intent else 'disabled'} "
                     f"closest_enemy_distance={int(enemy_distance)}"
                 )
-            if attack_candidate and time.time() >= getattr(self, "_suppress_attack_until", 0.0):
+            suppress_until = getattr(self, "_suppress_attack_until", 0.0)
+            if attack_candidate and (time.time() >= suppress_until or close_threat):
+                if close_threat and time.time() < suppress_until:
+                    self._aimlog(
+                        "attack_decision attack_allowed=True attack_reason=close_enemy_overrides_defensive_retreat "
+                        f"closest_enemy_distance={int(enemy_distance)} close_threshold={int(self.close_attack_threat_threshold(attack_range))} "
+                        f"cooldown_remaining_ms={int((suppress_until - time.time()) * 1000)}"
+                    )
                 if self.should_use_gadget_on_enemy(brawler, player_data, enemy_data, walls):
                     if self.use_gadget():
                         self.time_since_gadget_checked = time.time()
