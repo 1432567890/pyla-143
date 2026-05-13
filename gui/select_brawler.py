@@ -47,7 +47,15 @@ class SelectBrawler:
         install_tk_background_error_filter(self.app)
         tk._default_root = self.app
 
-        square_size = int(75 * scale_factor)
+        image_frame_width = int(845 * scale_factor)
+        grid_pad = max(1, int(3 * scale_factor))
+        scrollbar_allowance = max(18, int(26 * scale_factor))
+        square_size = min(
+            int(75 * scale_factor),
+            max(36, int((image_frame_width - scrollbar_allowance - 20 * grid_pad) / 10)),
+        )
+        self.square_size = square_size
+        self.grid_pad = grid_pad
         amount_of_rows = ceil(len(brawlers)/10) + 1
         necessary_height = (int(145 * scale_factor) + amount_of_rows*square_size + (amount_of_rows-1)*int(3 * scale_factor))
         window_height = min(necessary_height, int(820 * scale_factor))
@@ -195,7 +203,7 @@ class SelectBrawler:
         self.image_frame = ctk.CTkScrollableFrame(
             self.app,
             fg_color=self.colors['ui box gray'],
-            width=int(845 * scale_factor),
+            width=image_frame_width,
             height=image_frame_height,
         )
         self.image_frame.place(x=0, y=int(100 * scale_factor))
@@ -1073,6 +1081,8 @@ class SelectBrawler:
                     self.image_frame,
                     image=img_tk,
                     text="",
+                    width=self.square_size,
+                    height=self.square_size,
                     fg_color=self.colors["cherry red"] if card_data.selected else self.colors["ui box gray"],
                     corner_radius=int(6 * scale_factor),
                 )
@@ -1085,7 +1095,7 @@ class SelectBrawler:
                 label.bind("<Leave>", lambda e, c=label, s=card_data.selected: c.configure(
                     fg_color=self.colors["cherry red"] if s else self.colors["ui box gray"]
                 ))
-                label.grid(row=row_num, column=col_num, padx=int(3 * scale_factor), pady=int(3 * scale_factor))
+                label.grid(row=row_num, column=col_num, padx=self.grid_pad, pady=self.grid_pad)
             next_index = start_index + 40
             if next_index < len(matches):
                 self._image_render_after_id = self.app.after(1, lambda: render_batch(next_index))
