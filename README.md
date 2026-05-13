@@ -1,6 +1,6 @@
 ﻿# Pyla 143
 
-Pyla 143 is a fork of PylaAI, based on Pyla XXZ.
+Pyla 143 is a fork of PylaAI, based on Pyla XXZ. powered by школьник
 
 - Pyla XXZ: https://github.com/xxz-888/PylaAi-XXZ
 - PylaAI: https://github.com/PylaAI/PylaAI
