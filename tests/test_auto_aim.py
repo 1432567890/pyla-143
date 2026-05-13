@@ -38,6 +38,51 @@ class AutoAimTests(unittest.TestCase):
         self.assertFalse(decision.should_fire)
         self.assertEqual(decision.reason, "los_blocked")
 
+    def test_close_target_can_override_noisy_los_block(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[55, -10, 75, 10]],
+            walls=[[20, -25, 35, 25]],
+            attack_range=180,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: True,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.95,
+            close_tap_range=80,
+            dangerous_close_range=120,
+            close_los_override_range=90,
+            close_range_override=True,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertIn(decision.reason, {"close_tap", "close_range_override"})
+        self.assertEqual(decision.los_status, "close_override")
+
+    def test_close_target_ignores_stale_aim_line_mismatch(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[60, -12, 80, 12]],
+            walls=[],
+            attack_range=180,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            aim_line_angle=180,
+            min_confidence=0.80,
+            close_tap_range=50,
+            dangerous_close_range=120,
+            close_range_override=True,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertTrue(decision.close_range_override)
+
     def test_predicts_ahead_of_moving_target(self):
         decision = choose_auto_aim(
             player_pos=(0, 0),

@@ -5,6 +5,7 @@ from tactical_movement import (
     classify_dodge_mode,
     movement_keys_to_angle,
     score_dodge_angle,
+    should_seek_healing,
     threat_level_from_distance,
 )
 
@@ -42,6 +43,12 @@ class TacticalMovementTests(unittest.TestCase):
         candidates = candidate_dodge_angles(0, 0)
         self.assertIn(90.0, candidates)
         self.assertIn(270.0, candidates)
+
+    def test_should_seek_healing_on_low_health_or_active_window(self):
+        self.assertTrue(should_seek_healing(0.30, now=10.0, low_threshold=0.42))
+        self.assertTrue(should_seek_healing(0.90, active_until=12.0, now=10.0, low_threshold=0.42))
+        self.assertTrue(should_seek_healing(0.55, recent_damage=True, now=10.0, low_threshold=0.42))
+        self.assertFalse(should_seek_healing(0.85, recent_damage=False, now=10.0, low_threshold=0.42))
 
 
 if __name__ == "__main__":

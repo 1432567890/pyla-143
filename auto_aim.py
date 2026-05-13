@@ -124,6 +124,7 @@ def choose_auto_aim(
     close_tap_range=None,
     close_range_override=True,
     dangerous_close_range=None,
+    close_los_override_range=None,
 ):
     if not player_pos:
         return AutoAimDecision(False, reason="target_invalid")
@@ -135,6 +136,11 @@ def choose_auto_aim(
 
     close_tap_range = close_tap_range if close_tap_range is not None else min(120.0, attack_range * 0.28)
     dangerous_close_range = dangerous_close_range if dangerous_close_range is not None else max(close_tap_range, min(150.0, attack_range * 0.40))
+    close_los_override_range = (
+        close_los_override_range
+        if close_los_override_range is not None
+        else min(dangerous_close_range, max(close_tap_range, attack_range * 0.45))
+    )
     best = None
 
     closest_enemy_distance = None
@@ -158,7 +164,10 @@ def choose_auto_aim(
                 best = decision
             continue
 
-        if not _line_of_sight_clear(player_pos, target, walls, can_ignore_walls, walls_block_line_of_sight):
+        close_override = bool(close_range_override and distance <= dangerous_close_range)
+        close_los_override = bool(close_override and distance <= close_los_override_range)
+        target_los_clear = _line_of_sight_clear(player_pos, target, walls, can_ignore_walls, walls_block_line_of_sight)
+        if not target_los_clear and not close_los_override:
             decision = AutoAimDecision(
                 False,
                 target=target,
@@ -207,7 +216,6 @@ def choose_auto_aim(
             continue
 
         predicted_los_clear = _line_of_sight_clear(player_pos, predicted, walls, can_ignore_walls, walls_block_line_of_sight)
-        close_override = bool(close_range_override and distance <= dangerous_close_range)
         if not predicted_los_clear and not close_override:
             decision = AutoAimDecision(
                 False,
@@ -240,7 +248,7 @@ def choose_auto_aim(
         elif lead_distance > 0:
             confidence *= 0.90 + 0.10 * max(0.0, min(1.0, current_velocity_confidence))
 
-        if aim_line_angle is not None:
+        if aim_line_angle is not None and not close_override:
             mismatch = _angle_delta(angle, aim_line_angle)
             if mismatch <= 10:
                 confidence *= 1.04
@@ -272,7 +280,7 @@ def choose_auto_aim(
             velocity=velocity,
             threshold=min_confidence,
             close_range_override=close_override,
-            los_status="clear" if predicted_los_clear else "close_override",
+            los_status="clear" if target_los_clear and predicted_los_clear else "close_override",
             target_bbox=tuple(enemy),
             visible_enemy_count=visible_enemy_count,
             closest_enemy_distance=closest_enemy_distance,

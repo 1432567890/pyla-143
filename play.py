@@ -15,6 +15,7 @@ from tactical_movement import (
     classify_dodge_mode,
     movement_keys_to_angle,
     score_dodge_angle,
+    should_seek_healing,
     threat_level_from_distance,
 )
 from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info
@@ -121,6 +122,7 @@ class Movement:
         self.projectile_speed_px_s = float(bot_config.get("projectile_speed_px_s", 900.0))
         self.auto_aim_min_confidence = float(bot_config.get("auto_aim_min_confidence", 0.54))
         self.auto_aim_close_tap_range = float(bot_config.get("auto_aim_close_tap_range", 0))
+        self.auto_aim_close_los_override_range = float(bot_config.get("auto_aim_close_los_override_range", 0))
         self.close_range_attack_override = str(bot_config.get("close_range_attack_override", "true")).lower() in ("yes", "true", "1")
         self.attack_decision_debug = str(bot_config.get("attack_decision_debug", bot_config.get("auto_aim_debug", "yes"))).lower() in ("yes", "true", "1")
         self.auto_aim_debug = str(bot_config.get("auto_aim_debug", "yes")).lower() in ("yes", "true", "1")
@@ -131,8 +133,14 @@ class Movement:
         self.flicker_retreat_cooldown_seconds = float(bot_config.get("flicker_retreat_cooldown_ms", 900)) / 1000.0
         self.flicker_retreat_hold_seconds = float(bot_config.get("flicker_retreat_hold_ms", 650)) / 1000.0
         self.dangerous_close_range = float(bot_config.get("dangerous_close_range", 150))
+        self.heal_retreat_enabled = str(bot_config.get("heal_retreat_enabled", "true")).lower() in ("yes", "true", "1")
+        self.heal_low_health_threshold = float(bot_config.get("heal_low_health_threshold", 0.42))
+        self.heal_resume_health_threshold = float(bot_config.get("heal_resume_health_threshold", 0.72))
+        self.heal_retreat_hold_ms = float(bot_config.get("heal_retreat_hold_ms", 2400))
+        self.heal_attack_only_close_range = float(bot_config.get("heal_attack_only_close_range", 150))
         self._player_bar_history = []
         self._flicker_state = {"active_until": 0.0, "last_trigger": 0.0, "confidence": 0.0}
+        self._heal_state = {"active_until": 0.0, "last_health_ratio": None, "reason": ""}
         self._dodge_state = {"angle": None, "mode": "no_dodge", "score": 0.0, "until": 0.0}
         self._suppress_attack_until = 0.0
         self._last_aim_attempt_time = 0.0
@@ -231,6 +239,8 @@ class Movement:
         aim_line_angle = detect_aim_line_angle(getattr(self, "current_frame", None), player_pos)
         close_tap_range = getattr(self, "auto_aim_close_tap_range", 0)
         close_tap_range = close_tap_range if close_tap_range > 0 else None
+        close_los_override_range = getattr(self, "auto_aim_close_los_override_range", 0)
+        close_los_override_range = close_los_override_range if close_los_override_range > 0 else None
         decision = choose_auto_aim(
             player_pos=player_pos,
             enemy_data=enemy_data,
@@ -247,6 +257,7 @@ class Movement:
             close_tap_range=close_tap_range,
             close_range_override=getattr(self, "close_range_attack_override", True),
             dangerous_close_range=getattr(self, "dangerous_close_range", None),
+            close_los_override_range=close_los_override_range,
         )
         target_s = tuple(map(int, decision.target)) if decision.target else None
         predicted_s = tuple(map(int, decision.predicted)) if decision.predicted else None
@@ -1433,6 +1444,83 @@ class Play(Movement):
             self._manslog(f"flicker_detected={detected} flicker_confidence={confidence:.2f}")
         return active, max(confidence, self._flicker_state.get("confidence", 0.0) if active else 0.0)
 
+    def estimate_player_health_ratio(self, frame, player_data):
+        if frame is None or player_data is None:
+            return None
+        h, w = frame.shape[:2]
+        x1, y1, x2, _ = map(int, self.normalize_box(player_data))
+        bw = max(1, x2 - x1)
+        rx1 = max(0, x1 - int(bw * 0.38))
+        rx2 = min(w, x2 + int(bw * 0.38))
+        ry1 = max(0, y1 - int(bw * 0.72))
+        ry2 = max(0, y1 - int(bw * 0.16))
+        if rx1 >= rx2 or ry1 >= ry2:
+            return None
+        roi = frame[ry1:ry2, rx1:rx2]
+        if roi.size == 0:
+            return None
+        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+        green_mask = cv2.inRange(hsv, np.array((35, 70, 70), dtype=np.uint8), np.array((88, 255, 255), dtype=np.uint8))
+        ys, xs = np.nonzero(green_mask)
+        if xs.size < 8:
+            return None
+        width = max(1, rx2 - rx1)
+        green_span = float(xs.max() - xs.min() + 1)
+        return max(0.0, min(1.0, green_span / width))
+
+    def update_heal_state(self, health_ratio, flicker_active, flicker_confidence, current_time):
+        if not self.heal_retreat_enabled:
+            return False, "disabled"
+        active_until = float(self._heal_state.get("active_until", 0.0) or 0.0)
+        active = should_seek_healing(
+            health_ratio,
+            recent_damage=flicker_active and flicker_confidence >= 0.65,
+            active_until=active_until,
+            now=current_time,
+            low_threshold=self.heal_low_health_threshold,
+        )
+        if health_ratio is not None and health_ratio >= self.heal_resume_health_threshold:
+            active = False
+        if active:
+            reason = "low_health" if health_ratio is not None and health_ratio <= self.heal_low_health_threshold else "recent_damage"
+            self._heal_state["active_until"] = max(
+                active_until,
+                current_time + self.heal_retreat_hold_ms / 1000.0,
+            )
+            self._heal_state["last_health_ratio"] = health_ratio
+            self._heal_state["reason"] = reason
+            self._manslog(
+                f"heal_retreat active=True reason={reason} health_ratio={health_ratio} "
+                f"flicker_confidence={flicker_confidence:.2f}"
+            )
+            return True, reason
+        self._heal_state["last_health_ratio"] = health_ratio
+        if current_time >= active_until:
+            self._heal_state["reason"] = ""
+        return False, "healthy"
+
+    def choose_heal_retreat_angle(self, player_pos, enemy_data, teammate_data, walls, current_angle):
+        enemies = [
+            (self.get_distance(self.get_enemy_pos(enemy), player_pos), self.get_enemy_pos(enemy))
+            for enemy in (enemy_data or [])
+        ]
+        enemies.sort(key=lambda item: item[0])
+        if enemies:
+            threat_angle = self.angle_from_direction(enemies[0][1][0] - player_pos[0], enemies[0][1][1] - player_pos[1])
+            base = (threat_angle + 180.0) % 360.0
+        else:
+            base = current_angle
+            closest_teammate, _ = self.get_closest_teammate((player_pos[0], player_pos[1], player_pos[0], player_pos[1]), teammate_data)
+            if closest_teammate is not None:
+                base = self.angle_from_direction(closest_teammate[0] - player_pos[0], closest_teammate[1] - player_pos[1])
+
+        candidates = [base, (base + 30.0) % 360.0, (base - 30.0) % 360.0, (base + 65.0) % 360.0, (base - 65.0) % 360.0]
+        for candidate in candidates:
+            safe, reason = self._angle_safe_for_tactical_move(player_pos, candidate, walls)
+            if safe:
+                return candidate, "heal_retreat"
+        return current_angle, "heal_no_safe_angle"
+
     def _angle_safe_for_tactical_move(self, player_pos, angle, walls):
         if self.is_path_blocked_angle(player_pos, angle, walls):
             return False, "blocked_by_wall"
@@ -1850,6 +1938,13 @@ class Play(Movement):
             player_data,
             time.time(),
         )
+        health_ratio = self.estimate_player_health_ratio(self.current_frame, player_data)
+        heal_active, heal_reason = self.update_heal_state(
+            health_ratio,
+            flicker_active,
+            flicker_confidence,
+            time.time(),
+        )
 
         # --- No enemy in sight: follow teammate or roam ---
         if not self.is_there_enemy(enemy_data):
@@ -1948,6 +2043,13 @@ class Play(Movement):
                 angle = self.find_best_angle(player_pos, desired, walls)
                 vlog(f"showdown: movement angle={angle:.1f}° (desired={desired:.1f}°)")
 
+        if heal_active and fog_flee_angle is None:
+            angle, heal_angle_reason = self.choose_heal_retreat_angle(player_pos, enemy_data, teammate_data, walls, angle)
+            self._manslog(
+                f"heal_retreat angle={angle:.1f} reason={heal_reason} angle_reason={heal_angle_reason} "
+                f"health_ratio={health_ratio}"
+            )
+
         if fog_flee_angle is None:
             if flicker_active:
                 retreat_angle, retreat_reason = self.choose_flicker_retreat_angle(
@@ -2038,8 +2140,27 @@ class Play(Movement):
 
         if enemy_distance <= attack_range:
             enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "attack")
-            vlog(f"enemy in attack range (dist={int(enemy_distance)}px, range={attack_range}px), hittable={enemy_hittable}")
-            if enemy_hittable and time.time() >= getattr(self, "_suppress_attack_until", 0.0):
+            close_threat = (
+                self.close_range_attack_override
+                and enemy_distance <= max(
+                    self.dangerous_close_range,
+                    self.auto_aim_close_tap_range,
+                    attack_range * 0.45,
+                )
+            )
+            attack_candidate = enemy_hittable or close_threat
+            vlog(
+                f"enemy in attack range (dist={int(enemy_distance)}px, range={attack_range}px), "
+                f"hittable={enemy_hittable} close_threat={close_threat}"
+            )
+            if heal_active and enemy_distance > self.heal_attack_only_close_range:
+                attack_candidate = False
+                self._aimlog(
+                    "attack_decision attack_allowed=False attack_denied_reason=healing_retreat "
+                    f"closest_enemy_distance={int(enemy_distance)} heal_attack_only_close_range={int(self.heal_attack_only_close_range)} "
+                    f"health_ratio={health_ratio}"
+                )
+            if attack_candidate and time.time() >= getattr(self, "_suppress_attack_until", 0.0):
                 if self.should_use_gadget_on_enemy(brawler, player_data, enemy_data, walls):
                     if self.use_gadget():
                         self.time_since_gadget_checked = time.time()

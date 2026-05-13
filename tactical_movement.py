@@ -127,3 +127,11 @@ def candidate_dodge_angles(base_angle, threat_angle):
         if all(angle_delta(angle, existing) > 8.0 for existing in deduped):
             deduped.append(angle)
     return deduped
+
+
+def should_seek_healing(health_ratio, recent_damage=False, active_until=0.0, now=0.0, low_threshold=0.42):
+    if active_until and now < active_until:
+        return True
+    if health_ratio is None:
+        return bool(recent_damage)
+    return health_ratio <= low_threshold or (recent_damage and health_ratio <= low_threshold + 0.18)
