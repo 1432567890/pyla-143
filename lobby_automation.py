@@ -16,10 +16,18 @@ from utils import (
 
 debug = load_toml_as_dict("cfg/general_config.toml").get('super_debug', 'no') == "yes"
 gray_pixels_treshold = load_toml_as_dict("./cfg/bot_config.toml")['idle_pixels_minimum']
+DEFAULT_LOBBY_COORDS = {
+    "select_btn": [150, 950],
+    "trophy_observer": [20, 10, 650, 200],
+    "brawler_btn": [110, 490],
+}
+
+
 class LobbyAutomation:
 
     def __init__(self, window_controller):
         self.coords_cfg = load_toml_as_dict("./cfg/lobby_config.toml")
+        self.coords_cfg["lobby"] = {**DEFAULT_LOBBY_COORDS, **self.coords_cfg.get("lobby", {})}
         self.window_controller = window_controller
 
     def _read_state(self):

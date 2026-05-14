@@ -49,7 +49,8 @@ class TrophyObserver:
             (2199,  (9,  4, -5, -11)),
             (float("inf"), (9, 4, -5, -11)),
         ]
-        self.crop_region = load_toml_as_dict("./cfg/lobby_config.toml")['lobby']['trophy_observer']
+        lobby_config = load_toml_as_dict("./cfg/lobby_config.toml")
+        self.crop_region = lobby_config.get("lobby", {}).get("trophy_observer", [20, 10, 650, 200])
         self.trophies_multiplier = int(load_toml_as_dict("./cfg/general_config.toml").get("trophies_multiplier", 1))
 
         # Per-brawler milestone tracking for the trophies log.

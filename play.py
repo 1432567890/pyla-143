@@ -35,9 +35,22 @@ visual_debug = load_toml_as_dict("cfg/general_config.toml").get('visual_debug', 
 def vlog(*args):
     if visual_debug:
         print("[DBG]", *args)
-super_crop_area = load_toml_as_dict("./cfg/lobby_config.toml")['pixel_counter_crop_area']['super']
-gadget_crop_area = load_toml_as_dict("./cfg/lobby_config.toml")['pixel_counter_crop_area']['gadget']
-hypercharge_crop_area = load_toml_as_dict("./cfg/lobby_config.toml")['pixel_counter_crop_area']['hypercharge']
+DEFAULT_PIXEL_COUNTER_CROP_AREA = {
+    "super": [1460, 830, 1560, 930],
+    "gadget": [1580, 930, 1700, 1050],
+    "hypercharge": [1350, 940, 1450, 1050],
+}
+
+
+def _pixel_counter_crop_area():
+    lobby_config = load_toml_as_dict("./cfg/lobby_config.toml")
+    return {**DEFAULT_PIXEL_COUNTER_CROP_AREA, **lobby_config.get("pixel_counter_crop_area", {})}
+
+
+_crop_area = _pixel_counter_crop_area()
+super_crop_area = _crop_area["super"]
+gadget_crop_area = _crop_area["gadget"]
+hypercharge_crop_area = _crop_area["hypercharge"]
 
 class Movement:
 
@@ -710,10 +723,10 @@ class Play(Movement):
         self.seconds_to_hold_attack_after_reaching_max = load_toml_as_dict("cfg/bot_config.toml")["seconds_to_hold_attack_after_reaching_max"]
         self.current_frame = None
         general_config = load_toml_as_dict("cfg/general_config.toml")
-        lobby_config = load_toml_as_dict("./cfg/lobby_config.toml")
-        self.super_crop_area = lobby_config['pixel_counter_crop_area']['super']
-        self.gadget_crop_area = lobby_config['pixel_counter_crop_area']['gadget']
-        self.hypercharge_crop_area = lobby_config['pixel_counter_crop_area']['hypercharge']
+        crop_area = _pixel_counter_crop_area()
+        self.super_crop_area = crop_area["super"]
+        self.gadget_crop_area = crop_area["gadget"]
+        self.hypercharge_crop_area = crop_area["hypercharge"]
         global debug, visual_debug
         debug = str(general_config.get("super_debug", "no")).lower() in ("yes", "true", "1")
         visual_debug = str(general_config.get("visual_debug", "no")).lower() in ("yes", "true", "1")

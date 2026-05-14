@@ -19,7 +19,36 @@ STAR_DROP_TEMPLATE_THRESHOLD = 0.97
 
 end_results_path = r"./images/end_results/"
 
-region_data = load_toml_as_dict("./cfg/lobby_config.toml")['template_matching']
+DEFAULT_TEMPLATE_MATCHING = {
+    "powerpoint": [1000, 5, 80, 80],
+    "brawler_menu_task": [1450, 0, 80, 80],
+    "close_popup": [1740, 140, 140, 100],
+    "lobby_menu": [1790, 20, 75, 65],
+    "brawl_pass_house": [1750, 0, 169, 100],
+    "go_back_arrow": [0, 0, 175, 110],
+    "star_drop": [790, 350, 350, 350],
+    "trophies_screen": [1545, 915, 365, 168],
+    "starr_nova_event": [765, 910, 400, 130],
+    "exit_match_making": [1600, 925, 295, 135],
+}
+DEFAULT_LOBBY_CONFIG = {
+    "lobby": {
+        "select_btn": [150, 950],
+        "trophy_observer": [20, 10, 650, 200],
+        "brawler_btn": [110, 490],
+    },
+    "template_matching": DEFAULT_TEMPLATE_MATCHING,
+}
+
+
+def _merged_lobby_config():
+    lobby_config = load_toml_as_dict("./cfg/lobby_config.toml")
+    lobby = {**DEFAULT_LOBBY_CONFIG["lobby"], **lobby_config.get("lobby", {})}
+    template_matching = {**DEFAULT_TEMPLATE_MATCHING, **lobby_config.get("template_matching", {})}
+    return {**lobby_config, "lobby": lobby, "template_matching": template_matching}
+
+
+region_data = _merged_lobby_config()["template_matching"]
 super_debug = load_toml_as_dict("./cfg/general_config.toml").get('super_debug', 'no') == "yes"
 _last_printed_state = None
 if super_debug:
@@ -54,7 +83,7 @@ def load_template(image_path, width, height):
     cached_templates[(image_path, width, height)] = resized_image
     return resized_image
 
-crop_region = load_toml_as_dict("./cfg/lobby_config.toml")['lobby']['trophy_observer']
+crop_region = _merged_lobby_config()["lobby"]["trophy_observer"]
 _current_gamemode = load_toml_as_dict("./cfg/bot_config.toml").get("gamemode", "")
 
 # Showdown has place-based results (1st-4th in trio) instead of victory/defeat.
@@ -73,11 +102,11 @@ SHOWDOWN_PLACE_THRESHOLD = 0.95
 
 def refresh_runtime_config():
     global region_data, super_debug, crop_region, _current_gamemode
-    lobby_config = load_toml_as_dict("./cfg/lobby_config.toml")
+    lobby_config = _merged_lobby_config()
     general_config = load_toml_as_dict("./cfg/general_config.toml")
     bot_config = load_toml_as_dict("./cfg/bot_config.toml")
-    region_data = lobby_config['template_matching']
-    crop_region = lobby_config['lobby']['trophy_observer']
+    region_data = lobby_config["template_matching"]
+    crop_region = lobby_config["lobby"]["trophy_observer"]
     super_debug = str(general_config.get("super_debug", "no")).lower() in ("yes", "true", "1")
     _current_gamemode = bot_config.get("gamemode", "")
     if super_debug and not os.path.exists("./debug_frames/"):
