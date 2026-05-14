@@ -130,6 +130,8 @@ class Hub:
         self.time_tresholds.setdefault("super", 0.1)
         self.time_tresholds.setdefault("gadget", 0.5)
         self.time_tresholds.setdefault("hypercharge", 2)
+        self.time_tresholds.setdefault("wall_detection", 0.75)
+        self.time_tresholds.setdefault("no_detection_proceed", 8.5)
 
         # General config defaults
         self.general_config.setdefault("max_ips", "auto")
@@ -1413,9 +1415,17 @@ class Hub:
         container.grid_rowconfigure(0, minsize=S(70))  # extra top space for tooltips
 
         row_idx = 1
+        timer_defaults = {
+            "super": 0.1,
+            "hypercharge": 0.1,
+            "gadget": 0.1,
+            "wall_detection": 0.75,
+            "no_detection_proceed": 8.5,
+        }
 
         def create_timer_setting(param_name, label_text, tooltip_text=None, disabled=False):
             nonlocal row_idx
+            self.time_tresholds.setdefault(param_name, timer_defaults.get(param_name, 1.0))
 
             lbl = ctk.CTkLabel(container, text=label_text, font=font(S(18)))
             lbl.grid(row=row_idx, column=0, padx=S(20), pady=S(10), sticky="e")
@@ -1424,7 +1434,7 @@ class Hub:
             slider_entry_frame = ctk.CTkFrame(container, fg_color="transparent")
             slider_entry_frame.grid(row=row_idx, column=1, padx=S(20), pady=S(10), sticky="w")
 
-            val_var = tk.StringVar(value=str(self.time_tresholds[param_name]))
+            val_var = tk.StringVar(value=str(self.time_tresholds.get(param_name, timer_defaults.get(param_name, 1.0))))
 
             # The slider
             sld = ctk.CTkSlider(

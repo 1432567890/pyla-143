@@ -15,7 +15,7 @@ from utils import (
 )
 
 debug = load_toml_as_dict("cfg/general_config.toml").get('super_debug', 'no') == "yes"
-gray_pixels_treshold = load_toml_as_dict("./cfg/bot_config.toml")['idle_pixels_minimum']
+gray_pixels_treshold = load_toml_as_dict("./cfg/bot_config.toml").get('idle_pixels_minimum', 3000.0)
 DEFAULT_LOBBY_COORDS = {
     "select_btn": [150, 950],
     "trophy_observer": [20, 10, 650, 200],

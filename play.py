@@ -58,23 +58,23 @@ class Movement:
         bot_config = load_toml_as_dict("cfg/bot_config.toml")
         time_config = load_toml_as_dict("cfg/time_tresholds.toml")
         self.fix_movement_keys = {
-            "delay_to_trigger": bot_config["unstuck_movement_delay"],
-            "duration": bot_config["unstuck_movement_hold_time"],
+            "delay_to_trigger": bot_config.get("unstuck_movement_delay", 3.0),
+            "duration": bot_config.get("unstuck_movement_hold_time", 1.4),
             "toggled": False,
             "started_at": time.time(),
             "fixed": ""
         }
-        self.game_mode = bot_config["gamemode_type"]
-        gadget_value = bot_config["bot_uses_gadgets"]
+        self.game_mode = bot_config.get("gamemode_type", 3)
+        gadget_value = bot_config.get("bot_uses_gadgets", "yes")
         self.should_use_gadget = str(gadget_value).lower() in ("yes", "true", "1")
         self.gadget_cooldown = float(bot_config.get("gadget_cooldown", 1.0))
         self.last_gadget_time = 0.0
         self.super_cooldown = float(bot_config.get("super_cooldown", 1.0))
         self.last_super_time = 0.0
-        self.super_treshold = time_config["super"]
-        self.gadget_treshold = time_config["gadget"]
-        self.hypercharge_treshold = time_config["hypercharge"]
-        self.walls_treshold = time_config["wall_detection"]
+        self.super_treshold = time_config.get("super", 0.1)
+        self.gadget_treshold = time_config.get("gadget", 0.1)
+        self.hypercharge_treshold = time_config.get("hypercharge", 0.1)
+        self.walls_treshold = time_config.get("wall_detection", 0.75)
         self.keep_walls_in_memory = self.walls_treshold <= 1
         self.last_walls_data = []
         self.keys_hold = []
@@ -652,7 +652,7 @@ class Play(Movement):
         time_config = load_toml_as_dict("cfg/time_tresholds.toml")
 
         self.Detect_main_info = Detect(main_info_model, classes=['enemy', 'teammate', 'player'])
-        self.tile_detector_model_classes = bot_config["wall_model_classes"]
+        self.tile_detector_model_classes = bot_config.get("wall_model_classes", ["wall", "bush", "close_bush"])
         self.Detect_tile_detector = Detect(
             tile_detector_model,
             classes=self.tile_detector_model_classes
@@ -703,16 +703,16 @@ class Play(Movement):
         self.wall_history = []
         self.wall_history_length = int(bot_config.get("wall_history_length", 3))
         self.scene_data = []
-        self.should_detect_walls = bot_config["gamemode"] == "showdown"
-        self.is_showdown = bot_config["gamemode"] == "showdown"
-        self.minimum_movement_delay = bot_config["minimum_movement_delay"]
-        self.no_detection_proceed_delay = time_config["no_detection_proceed"]
+        self.should_detect_walls = bot_config.get("gamemode", "showdown") == "showdown"
+        self.is_showdown = bot_config.get("gamemode", "showdown") == "showdown"
+        self.minimum_movement_delay = bot_config.get("minimum_movement_delay", 0.1)
+        self.no_detection_proceed_delay = time_config.get("no_detection_proceed", 8.5)
         self.no_detection_q_press_interval = float(time_config.get("no_detection_q_press_interval", 15.0))
-        self.gadget_pixels_minimum = bot_config["gadget_pixels_minimum"]
-        self.hypercharge_pixels_minimum = bot_config["hypercharge_pixels_minimum"]
-        self.super_pixels_minimum = bot_config["super_pixels_minimum"]
-        self.wall_detection_confidence = bot_config["wall_detection_confidence"]
-        self.entity_detection_confidence = bot_config["entity_detection_confidence"]
+        self.gadget_pixels_minimum = bot_config.get("gadget_pixels_minimum", 1100.0)
+        self.hypercharge_pixels_minimum = bot_config.get("hypercharge_pixels_minimum", 1800.0)
+        self.super_pixels_minimum = bot_config.get("super_pixels_minimum", 1800.0)
+        self.wall_detection_confidence = bot_config.get("wall_detection_confidence", 0.9)
+        self.entity_detection_confidence = bot_config.get("entity_detection_confidence", 0.6)
         self.entity_detection_retry_confidence = float(
             bot_config.get("entity_detection_retry_confidence", max(0.35, self.entity_detection_confidence - 0.20))
         )
