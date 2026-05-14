@@ -191,13 +191,48 @@ cached_toml = {}
 _toml_write_lock = threading.RLock()
 _brawler_data_lock = threading.RLock()
 
+def _deep_merge_missing(defaults, current):
+    if not isinstance(defaults, dict):
+        return current
+    if not isinstance(current, dict):
+        return current
+    merged = dict(current)
+    for key, default_value in defaults.items():
+        if key not in merged:
+            merged[key] = default_value
+        elif isinstance(default_value, dict) and isinstance(merged[key], dict):
+            merged[key] = _deep_merge_missing(default_value, merged[key])
+    return merged
+
+
+def _example_path_for(file_path):
+    normalized = os.path.normpath(str(file_path))
+    if normalized.endswith(".toml.example"):
+        return None
+    return f"{normalized}.example"
+
+
+def _load_toml_defaults(file_path):
+    example_path = _example_path_for(file_path)
+    if not example_path or not os.path.exists(example_path):
+        return {}
+    try:
+        with open(example_path, "r", encoding="utf-8-sig") as f:
+            loaded = toml.load(f)
+            return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
 def load_toml_as_dict(file_path):
     if file_path not in cached_toml:
+        defaults = _load_toml_defaults(file_path)
         if os.path.exists(file_path):
             with open(file_path, 'r', encoding='utf-8-sig') as f:
-                cached_toml[file_path] = toml.load(f)
+                loaded = toml.load(f)
+                cached_toml[file_path] = _deep_merge_missing(defaults, loaded)
         else:
-            cached_toml[file_path] = {}
+            cached_toml[file_path] = defaults
     return cached_toml[file_path]
 
 def clear_toml_cache(file_path=None):
