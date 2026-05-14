@@ -63,6 +63,9 @@ class CombatAdaptationTests(unittest.TestCase):
         play.brawlers_info = {"shelly": {"ignore_walls_for_attacks": False}}
         play.attack_cooldown = 0.0
         play.close_range_attack_cooldown_multiplier = 0.55
+        play.attack_spam_enabled = True
+        play.attack_spam_cooldown_multiplier = 0.45
+        play.attack_spam_requires_los = True
         play.last_attack_time = 0.0
         play._suppress_attack_until = 0.0
         play._last_aim_attempt_time = 0.0
@@ -204,6 +207,69 @@ class CombatAdaptationTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertFalse(second)
         self.assertEqual(len(window.angles), 1)
+
+    def test_attack_spam_shortens_cooldown_for_valid_in_range_enemy(self):
+        class AimWindow:
+            def __init__(self):
+                self.angles = []
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angles.append((angle, kwargs))
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.attack_cooldown = 0.5
+        play.attack_spam_enabled = True
+        play.attack_spam_cooldown_multiplier = 0.45
+
+        first = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
+        play.last_attack_time -= 0.24
+        second = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(len(window.angles), 2)
+
+    def test_attack_spam_disabled_preserves_normal_cooldown(self):
+        class AimWindow:
+            def __init__(self):
+                self.angles = []
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angles.append((angle, kwargs))
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.attack_cooldown = 0.5
+        play.attack_spam_enabled = False
+
+        first = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
+        play.last_attack_time -= 0.24
+        second = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(window.angles), 1)
+
+    def test_attack_spam_requires_line_of_sight(self):
+        class AimWindow:
+            def __init__(self):
+                self.angles = []
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angles.append((angle, kwargs))
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.attack_cooldown = 0.0
+        play.attack_spam_enabled = True
+        play.attack_spam_requires_los = True
+        play.walls_block_line_of_sight = lambda *_args, **_kwargs: True
+
+        fired = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
+
+        self.assertFalse(fired)
+        self.assertEqual(window.angles, [])
 
     def test_close_threat_forces_movement_pause_for_repeated_aimed_attacks(self):
         class AimWindow:

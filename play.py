@@ -86,6 +86,9 @@ class Movement:
         self.window_controller = window_controller
         self.attack_cooldown = float(bot_config.get("attack_cooldown", 0.12))
         self.close_range_attack_cooldown_multiplier = float(bot_config.get("close_range_attack_cooldown_multiplier", 0.55))
+        self.attack_spam_enabled = str(bot_config.get("attack_spam_enabled", "true")).lower() in ("yes", "true", "1")
+        self.attack_spam_cooldown_multiplier = float(bot_config.get("attack_spam_cooldown_multiplier", 0.45))
+        self.attack_spam_requires_los = str(bot_config.get("attack_spam_requires_los", "true")).lower() in ("yes", "true", "1")
         self.last_attack_time = 0.0
         self.TILE_SIZE = 60
         # Wall-based stuck detector: samples wall bboxes on an interval, ignores
@@ -310,12 +313,47 @@ class Movement:
             close_los_override_range=close_los_override_range,
         )
 
-    def log_attack_decision(self, decision, attack_range, aim_frequency_hz=0.0, input_mode=None, input_busy=False, denied_by=None):
+    def is_attack_spam_active(self, brawler, decision):
+        if not getattr(self, "attack_spam_enabled", True):
+            return False
+        if not decision.should_fire or not decision.in_range:
+            return False
+        if not getattr(self, "attack_spam_requires_los", True):
+            return True
+        if decision.line_of_sight:
+            return True
+        return self.can_attack_through_walls(brawler, "attack", self.brawlers_info)
+
+    def attack_cooldown_multiplier_for_decision(self, brawler, decision):
+        multiplier = 1.0
+        if self.is_attack_spam_active(brawler, decision):
+            multiplier = min(
+                multiplier,
+                max(0.05, min(1.0, getattr(self, "attack_spam_cooldown_multiplier", 0.45))),
+            )
+        if decision.close_threat or decision.use_tap:
+            multiplier = min(
+                multiplier,
+                max(0.25, min(1.0, getattr(self, "close_range_attack_cooldown_multiplier", 0.55))),
+            )
+        return multiplier
+
+    def log_attack_decision(
+            self,
+            decision,
+            attack_range,
+            aim_frequency_hz=0.0,
+            input_mode=None,
+            input_busy=False,
+            denied_by=None,
+            attack_spam_active=False,
+            effective_cooldown=None):
         target_s = tuple(map(int, decision.target)) if decision.target else None
         predicted_s = tuple(map(int, decision.predicted)) if decision.predicted else None
         angle_s = None if decision.aim_angle is None else round(decision.aim_angle, 1)
         dist_s = None if decision.distance is None else int(decision.distance)
         closest_s = None if decision.closest_enemy_distance is None else int(decision.closest_enemy_distance)
+        cooldown_s = self.attack_cooldown if effective_cooldown is None else effective_cooldown
         if input_mode is None:
             input_mode = "tap" if decision.use_tap else "aimed_drag"
             if not getattr(self, "aimed_attacks_enabled", False) or not hasattr(self.window_controller, "aim_attack_angle"):
@@ -331,6 +369,7 @@ class Movement:
             f"in_range={decision.in_range} line_of_sight={decision.los_status} "
             f"confidence={decision.confidence:.2f} confidence_threshold={decision.threshold:.2f} "
             f"close_threat={decision.close_threat} close_range_override={decision.close_range_override} "
+            f"attack_spam_active={attack_spam_active} effective_cooldown_ms={int(max(0.0, cooldown_s) * 1000)} "
             f"cooldown_remaining_ms={int(decision.cooldown_remaining_ms or 0)} "
             f"input_busy={input_busy} aim_frequency_hz={aim_frequency_hz:.2f} input_mode={input_mode} tap={decision.use_tap} "
             f"predicted_point={predicted_s} angle={angle_s} "
@@ -349,12 +388,19 @@ class Movement:
         input_mode = "tap" if decision.use_tap else "aimed_drag"
         if not getattr(self, "aimed_attacks_enabled", False) or not hasattr(self.window_controller, "aim_attack_angle"):
             input_mode = "tap_fallback"
-        self.log_attack_decision(decision, attack_range, aim_frequency_hz=aim_frequency_hz, input_mode=input_mode)
+        attack_spam_active = self.is_attack_spam_active(brawler, decision)
+        cooldown_multiplier = self.attack_cooldown_multiplier_for_decision(brawler, decision)
+        effective_cooldown = max(0.0, self.attack_cooldown * cooldown_multiplier)
+        self.log_attack_decision(
+            decision,
+            attack_range,
+            aim_frequency_hz=aim_frequency_hz,
+            input_mode=input_mode,
+            attack_spam_active=attack_spam_active,
+            effective_cooldown=effective_cooldown,
+        )
         if not decision.should_fire:
             return False
-        cooldown_multiplier = 1.0
-        if decision.close_threat or decision.use_tap:
-            cooldown_multiplier = max(0.25, min(1.0, getattr(self, "close_range_attack_cooldown_multiplier", 0.55)))
         force_release_movement = bool(
             decision.close_threat
             or not getattr(self.window_controller, "enable_parallel_movement_attack", True)
@@ -365,7 +411,6 @@ class Movement:
             or not hasattr(self.window_controller, "aim_attack_angle")
         ):
             return self.attack(cooldown_multiplier=cooldown_multiplier, force_release_movement=force_release_movement)
-        effective_cooldown = max(0.0, self.attack_cooldown * cooldown_multiplier)
         if effective_cooldown > 0:
             current_time = time.time()
             if current_time - self.last_attack_time < effective_cooldown:
@@ -378,6 +423,8 @@ class Movement:
                     input_mode=input_mode,
                     input_busy=True,
                     denied_by="attack_on_cooldown",
+                    attack_spam_active=attack_spam_active,
+                    effective_cooldown=effective_cooldown,
                 )
                 return False
             self.last_attack_time = current_time
