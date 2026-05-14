@@ -1278,6 +1278,46 @@ class WindowController:
             print(f"[MOVE] movement_restored_after_attack=False reason={e}")
             return False
 
+    def pause_movement_for_attack(self):
+        if not self.are_we_moving or self.last_joystick_pos == (None, None):
+            return None
+        movement_before = self.last_joystick_pos
+        try:
+            self.touch_up(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
+            self.are_we_moving = False
+            if self.joystick_debug:
+                print(
+                    "[MOVE] movement_paused_for_attack=True "
+                    f"movement_vector_before_attack={movement_before}"
+                )
+            return movement_before
+        except Exception as e:
+            print(f"[MOVE] movement_paused_for_attack=False reason={e}")
+            return None
+
+    def resume_movement_after_attack(self, movement_before):
+        if movement_before is None:
+            return False
+        try:
+            self.touch_down(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
+            self.touch_move(movement_before[0], movement_before[1], pointer_id=self.PID_JOYSTICK)
+            now = time.time()
+            self.are_we_moving = True
+            self.last_joystick_down_time = now
+            self.last_joystick_keepalive_time = now
+            self.last_joystick_command_time = now
+            self.last_joystick_pos = movement_before
+            if self.joystick_debug:
+                print(
+                    "[MOVE] movement_resumed_after_attack=True "
+                    f"movement_vector_after_attack={movement_before}"
+                )
+            return True
+        except Exception as e:
+            print(f"[MOVE] movement_resumed_after_attack=False reason={e}")
+            self.are_we_moving = False
+            return False
+
     def stop_joystick(self, reason="explicit_stop"):
         """Release the joystick touch."""
         if self.are_we_moving:
@@ -1330,12 +1370,13 @@ class WindowController:
             self.last_joystick_pos = (self.joystick_x + delta_x, self.joystick_y + delta_y)
         self.last_joystick_command_time = now
 
-    def click(self, x: int, y: int, delay=0.005, already_include_ratio=True, touch_up=True, touch_down=True):
+    def click(self, x: int, y: int, delay=0.005, already_include_ratio=True, touch_up=True, touch_down=True, force_release_movement=False):
         if not already_include_ratio:
             x = x * self.width_ratio
             y = y * self.height_ratio
         # Use PID_ATTACK for clicks so we don't interrupt movement
         movement_before = self.last_joystick_pos if self.are_we_moving else None
+        paused_movement = self.pause_movement_for_attack() if force_release_movement else None
         if self.joystick_debug and touch_down and touch_up:
             print(
                 "[AIM] attack_started "
@@ -1346,7 +1387,10 @@ class WindowController:
         if touch_down: self.touch_down(x, y, pointer_id=self.PID_ATTACK)
         time.sleep(delay)
         if touch_up: self.touch_up(x, y, pointer_id=self.PID_ATTACK)
-        restored = self.restore_movement_after_attack(movement_before) if touch_up else False
+        if paused_movement is not None and touch_up:
+            restored = self.resume_movement_after_attack(paused_movement)
+        else:
+            restored = self.restore_movement_after_attack(movement_before) if touch_up else False
         if self.joystick_debug and touch_down and touch_up:
             print(
                 "[AIM] attack_finished "
@@ -1363,13 +1407,13 @@ class WindowController:
         time.sleep(duration)
         self.touch_up(x, y, pointer_id=self.PID_ATTACK)
 
-    def press_key(self, key, delay=0.005, touch_up=True, touch_down=True):
+    def press_key(self, key, delay=0.005, touch_up=True, touch_down=True, force_release_movement=False):
         if key not in key_coords_dict:
             return
         x, y = key_coords_dict[key]
         target_x = x * self.width_ratio
         target_y = y * self.height_ratio
-        self.click(target_x, target_y, delay, touch_up=touch_up, touch_down=touch_down)
+        self.click(target_x, target_y, delay, touch_up=touch_up, touch_down=touch_down, force_release_movement=force_release_movement)
 
     def android_back(self):
         try:
@@ -1379,7 +1423,7 @@ class WindowController:
             print(f"Could not press Android Back through ADB: {e}")
             return False
 
-    def aim_attack_angle(self, angle_degrees: float, radius: float = 170.0, duration: float = 0.04):
+    def aim_attack_angle(self, angle_degrees: float, radius: float = 170.0, duration: float = 0.04, force_release_movement=False):
         x, y = key_coords_dict["M"]
         start_x = x * self.width_ratio
         start_y = y * self.height_ratio
@@ -1387,9 +1431,9 @@ class WindowController:
         angle_rad = math.radians(angle_degrees)
         end_x = start_x + math.cos(angle_rad) * scaled_radius
         end_y = start_y + math.sin(angle_rad) * scaled_radius
-        self.swipe(start_x, start_y, end_x, end_y, duration=duration)
+        self.swipe(start_x, start_y, end_x, end_y, duration=duration, force_release_movement=force_release_movement)
 
-    def swipe(self, start_x, start_y, end_x, end_y, duration=0.2):
+    def swipe(self, start_x, start_y, end_x, end_y, duration=0.2, force_release_movement=False):
         dist_x = end_x - start_x
         dist_y = end_y - start_y
         distance = math.sqrt(dist_x ** 2 + dist_y ** 2)
@@ -1402,6 +1446,7 @@ class WindowController:
         step_delay = duration / steps
 
         movement_before = self.last_joystick_pos if self.are_we_moving else None
+        paused_movement = self.pause_movement_for_attack() if force_release_movement else None
         if self.joystick_debug:
             print(
                 "[AIM] attack_started "
@@ -1417,7 +1462,10 @@ class WindowController:
             time.sleep(step_delay)
             self.touch_move(int(cx), int(cy), pointer_id=self.PID_ATTACK)
         self.touch_up(int(end_x), int(end_y), pointer_id=self.PID_ATTACK)
-        restored = self.restore_movement_after_attack(movement_before)
+        if paused_movement is not None:
+            restored = self.resume_movement_after_attack(paused_movement)
+        else:
+            restored = self.restore_movement_after_attack(movement_before)
         if self.joystick_debug:
             print(
                 "[AIM] attack_finished "

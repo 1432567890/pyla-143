@@ -252,14 +252,14 @@ class Movement:
             return "W" if direction_y > 0 else "S"
         return "S" if direction_y > 0 else "W"
 
-    def attack(self, touch_up=True, touch_down=True, cooldown_multiplier=1.0):
+    def attack(self, touch_up=True, touch_down=True, cooldown_multiplier=1.0, force_release_movement=False):
         effective_cooldown = max(0.0, self.attack_cooldown * float(cooldown_multiplier))
         if touch_up and touch_down and effective_cooldown > 0:
             current_time = time.time()
             if current_time - self.last_attack_time < effective_cooldown:
                 return False
             self.last_attack_time = current_time
-        self.window_controller.press_key("M", touch_up=touch_up, touch_down=touch_down)
+        self.window_controller.press_key("M", touch_up=touch_up, touch_down=touch_down, force_release_movement=force_release_movement)
         return True
 
     def aimed_attack(self, angle_degrees):
@@ -367,12 +367,16 @@ class Movement:
         cooldown_multiplier = 1.0
         if decision.close_threat or decision.use_tap:
             cooldown_multiplier = max(0.25, min(1.0, getattr(self, "close_range_attack_cooldown_multiplier", 0.55)))
+        force_release_movement = bool(
+            decision.close_threat
+            or not getattr(self.window_controller, "enable_parallel_movement_attack", True)
+        )
         if (
             decision.use_tap
             or not getattr(self, "aimed_attacks_enabled", False)
             or not hasattr(self.window_controller, "aim_attack_angle")
         ):
-            return self.attack(cooldown_multiplier=cooldown_multiplier)
+            return self.attack(cooldown_multiplier=cooldown_multiplier, force_release_movement=force_release_movement)
         effective_cooldown = max(0.0, self.attack_cooldown * cooldown_multiplier)
         if effective_cooldown > 0:
             current_time = time.time()
@@ -389,7 +393,7 @@ class Movement:
                 )
                 return False
             self.last_attack_time = current_time
-        self.window_controller.aim_attack_angle(decision.aim_angle)
+        self.window_controller.aim_attack_angle(decision.aim_angle, force_release_movement=force_release_movement)
         return True
 
     def use_hypercharge(self):

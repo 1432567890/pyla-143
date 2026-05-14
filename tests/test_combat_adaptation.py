@@ -103,7 +103,7 @@ class CombatAdaptationTests(unittest.TestCase):
             def __init__(self):
                 self.angle = None
 
-            def aim_attack_angle(self, angle):
+            def aim_attack_angle(self, angle, **kwargs):
                 self.angle = angle
 
         window = AimWindow()
@@ -122,7 +122,7 @@ class CombatAdaptationTests(unittest.TestCase):
             def __init__(self):
                 self.angle = None
 
-            def aim_attack_angle(self, angle):
+            def aim_attack_angle(self, angle, **kwargs):
                 self.angle = angle
 
         window = AimWindow()
@@ -141,7 +141,7 @@ class CombatAdaptationTests(unittest.TestCase):
             def __init__(self):
                 self.angle = None
 
-            def aim_attack_angle(self, angle):
+            def aim_attack_angle(self, angle, **kwargs):
                 self.angle = angle
 
         window = AimWindow()
@@ -168,8 +168,8 @@ class CombatAdaptationTests(unittest.TestCase):
             def __init__(self):
                 self.angles = []
 
-            def aim_attack_angle(self, angle):
-                self.angles.append(angle)
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angles.append((angle, kwargs))
 
         window = AimWindow()
         play = self.make_auto_aim_play(window)
@@ -182,6 +182,29 @@ class CombatAdaptationTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertFalse(second)
         self.assertEqual(len(window.angles), 1)
+
+    def test_close_threat_forces_movement_pause_for_repeated_aimed_attacks(self):
+        class AimWindow:
+            def __init__(self):
+                self.calls = []
+                self.enable_parallel_movement_attack = True
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.calls.append((angle, kwargs))
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.attack_cooldown = 0.05
+        play.dangerous_close_range = 180
+
+        first = play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+        play.last_attack_time -= 0.06
+        second = play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(len(window.calls), 2)
+        self.assertTrue(all(call[1].get("force_release_movement") for call in window.calls))
 
     def test_playstyle_env_exposes_biomistik_helpers(self):
         play = object.__new__(Play)
