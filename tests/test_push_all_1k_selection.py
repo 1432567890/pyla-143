@@ -96,7 +96,7 @@ class PushAll1kSelectionTest(unittest.TestCase):
             "player_tag": "TAG",
             "timeout_seconds": 15,
         }), patch("gui.select_brawler.fetch_brawl_stars_player", return_value=player_data):
-            for target in (250, 500, 750, 1000, 1250, 1500):
+            for target in (250, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000):
                 with self.subTest(target=target):
                     data = SelectBrawler.get_push_all_data(obj, target)
 
@@ -105,6 +105,14 @@ class PushAll1kSelectionTest(unittest.TestCase):
                     self.assertTrue(all(row["selection_method"] == "lowest_trophies" for row in data))
                     self.assertFalse(data[0]["automatically_pick"])
                     self.assertTrue(all(row["automatically_pick"] for row in data[1:]))
+
+    def test_push_all_custom_target_parser_accepts_positive_numbers(self):
+        self.assertEqual(SelectBrawler.parse_push_all_target("2000"), 2000)
+        self.assertEqual(SelectBrawler.parse_push_all_target(" 2500 "), 2500)
+        self.assertIsNone(SelectBrawler.parse_push_all_target(""))
+        self.assertIsNone(SelectBrawler.parse_push_all_target("abc"))
+        self.assertIsNone(SelectBrawler.parse_push_all_target("0"))
+        self.assertIsNone(SelectBrawler.parse_push_all_target("100000"))
 
 
 if __name__ == "__main__":

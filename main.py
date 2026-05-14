@@ -24,8 +24,10 @@ from play import Play
 from runtime_control import (
     CHANGE_BRAWLER_REQUESTED,
     OPEN_STATS_REQUESTED,
+    PAUSED,
     RELOAD_REQUESTED,
     RUNNING,
+    STOPPED,
     RuntimeControlWindow,
     read_state,
     write_state,
@@ -224,7 +226,19 @@ def pyla_main(data):
             self.cooldown_start_time = 0
             self.cooldown_duration = 3 * 60
             self.match_ready_at = 0.0
-            self.match_warmup_seconds = float(load_toml_as_dict("cfg/bot_config.toml").get("match_warmup_seconds", 0.0))
+            bot_config = load_toml_as_dict("cfg/bot_config.toml")
+            self.match_warmup_seconds = float(bot_config.get("match_warmup_seconds", 0.0))
+            self.movement_inactivity_pause_reset_enabled = str(
+                bot_config.get("movement_inactivity_pause_reset_enabled", "yes")
+            ).lower() in ("yes", "true", "1")
+            self.movement_inactivity_pause_reset_seconds = float(
+                bot_config.get("movement_inactivity_pause_reset_seconds", 3.0)
+            )
+            self.movement_inactivity_pause_reset_cooldown = float(
+                bot_config.get("movement_inactivity_pause_reset_cooldown", 10.0)
+            )
+            self.last_movement_activity_at = time.time()
+            self.last_movement_inactivity_pause_reset = 0.0
             time_thresholds = load_toml_as_dict("cfg/time_tresholds.toml")
             self.started_at = time.time()
             self.low_ips_startup_grace_seconds = float(time_thresholds.get("low_ips_startup_grace_seconds", 120))
@@ -1055,6 +1069,54 @@ def pyla_main(data):
             time.sleep(0.1)
             return True
 
+        def handle_movement_inactivity_pause_reset(self):
+            if not getattr(self, "movement_inactivity_pause_reset_enabled", True):
+                return False
+            if self.state != "match" or self.was_paused:
+                self.last_movement_activity_at = time.time()
+                return False
+
+            control_state = read_state(self.control_window.state_path)
+            if control_state in {PAUSED, STOPPED}:
+                self.last_movement_activity_at = time.time()
+                return False
+
+            now = time.time()
+            threshold = max(0.5, float(getattr(self, "movement_inactivity_pause_reset_seconds", 3.0)))
+            cooldown = max(threshold, float(getattr(self, "movement_inactivity_pause_reset_cooldown", 10.0)))
+            last_cmd = float(getattr(self.window_controller, "last_joystick_command_time", 0.0) or 0.0)
+            moving = bool(getattr(self.window_controller, "are_we_moving", False) and last_cmd > 0.0)
+            if moving and now - last_cmd <= threshold:
+                self.last_movement_activity_at = now
+                return False
+
+            if not getattr(self, "last_movement_activity_at", 0.0):
+                self.last_movement_activity_at = now
+                return False
+            if now - self.last_movement_activity_at < threshold:
+                return False
+            if now - getattr(self, "last_movement_inactivity_pause_reset", 0.0) < cooldown:
+                return False
+
+            self.last_movement_inactivity_pause_reset = now
+            self.last_movement_activity_at = now
+            print(
+                "[MOVE] movement_inactivity_pause_reset "
+                f"inactive_for_ms={int(threshold * 1000)} "
+                f"are_we_moving={getattr(self.window_controller, 'are_we_moving', False)} "
+                f"last_joystick_command_age_ms={int((now - last_cmd) * 1000) if last_cmd else -1}"
+            )
+            write_state(self.control_window.state_path, PAUSED)
+            self.window_controller.keys_up(list("wasd"))
+            self.Play.reset_match_control_state()
+            write_state(self.control_window.state_path, RUNNING)
+            self.Play.time_since_detections["player"] = time.time()
+            self.Play.time_since_detections["enemy"] = time.time()
+            self.Play.time_since_player_last_found = time.time()
+            self.Play.time_since_last_proceeding = time.time()
+            self.last_processed_frame_id = -1
+            return True
+
         def main(self): #this is for timer to stop after time
             s_time = time.time()
             c = 0
@@ -1170,6 +1232,7 @@ def pyla_main(data):
                     time.perf_counter() - play_start,
                 )
                 c += 1
+                self.handle_movement_inactivity_pause_reset()
                 self.recover_slow_feed()
 
                 if self.max_ips:

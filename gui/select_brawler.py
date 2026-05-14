@@ -33,6 +33,7 @@ from gui.main import install_tk_background_error_filter
 from gui.theme import COLORS, font
 
 RARITY_CONFIG_PATH = "cfg/brawler_rarities.json"
+PUSH_ALL_TARGETS = [250, 500, 750, 1000, 1250, 1500, 2000, 2500, 3000]
 
 orig_screen_width, orig_screen_height = 1920, 1080
 width, height = pyautogui.size()
@@ -728,7 +729,7 @@ class SelectBrawler:
         top.title("Push All Target")
         top.attributes("-topmost", True)
         win_w = int(360 * scale_factor)
-        win_h = int(300 * scale_factor)
+        win_h = int(430 * scale_factor)
         top.geometry(f"{win_w}x{win_h}+{str(int(950 * scale_factor))}+{str(int(260 * scale_factor))}")
 
         ctk.CTkLabel(
@@ -748,10 +749,10 @@ class SelectBrawler:
                 pass
             self.push_all(target)
 
-        targets = [250, 500, 750, 1000, 1250, 1500]
+        targets = PUSH_ALL_TARGETS
         for index, target in enumerate(targets):
-            row = index // 2
-            col = index % 2
+            row = index // 3
+            col = index % 3
             ctk.CTkButton(
                 button_frame,
                 text=str(target),
@@ -762,9 +763,68 @@ class SelectBrawler:
                 font=font(int(20 * scale_factor), "bold"),
                 border_color=self.colors['cherry red'],
                 border_width=int(2 * scale_factor),
-                width=int(120 * scale_factor),
+                width=int(92 * scale_factor),
                 height=int(42 * scale_factor),
-            ).grid(row=row, column=col, padx=int(10 * scale_factor), pady=int(8 * scale_factor))
+            ).grid(row=row, column=col, padx=int(6 * scale_factor), pady=int(8 * scale_factor))
+
+        custom_var = tk.StringVar()
+        error_var = tk.StringVar(value="")
+
+        ctk.CTkLabel(
+            top,
+            text="Custom target:",
+            font=font(int(16 * scale_factor), "bold"),
+            text_color=self.colors["text"],
+        ).pack(pady=(int(14 * scale_factor), int(4 * scale_factor)))
+        custom_entry = ctk.CTkEntry(
+            top,
+            textvariable=custom_var,
+            placeholder_text="e.g. 1800",
+            fg_color=self.colors['ui box gray'],
+            border_color=self.colors['cherry red'],
+            text_color=self.colors["text"],
+            width=int(160 * scale_factor),
+        )
+        custom_entry.pack()
+        error_label = ctk.CTkLabel(
+            top,
+            textvariable=error_var,
+            font=font(int(12 * scale_factor)),
+            text_color=self.colors["indian red"],
+        )
+        error_label.pack(pady=(int(4 * scale_factor), 0))
+
+        def choose_custom_target():
+            target = self.parse_push_all_target(custom_var.get())
+            if target is None:
+                error_var.set("Enter a number from 1 to 99999")
+                return
+            choose_target(target)
+
+        custom_entry.bind("<Return>", lambda _event: choose_custom_target())
+        ctk.CTkButton(
+            top,
+            text="Push Custom",
+            command=choose_custom_target,
+            fg_color=self.colors['ui box gray'],
+            hover_color=self.colors['cherry red'],
+            text_color=self.colors["text"],
+            font=font(int(16 * scale_factor), "bold"),
+            border_color=self.colors['cherry red'],
+            border_width=int(2 * scale_factor),
+            width=int(160 * scale_factor),
+            height=int(38 * scale_factor),
+        ).pack(pady=(int(8 * scale_factor), 0))
+
+    @staticmethod
+    def parse_push_all_target(value):
+        text = str(value or "").strip()
+        if not text.isdigit():
+            return None
+        target = int(text)
+        if target <= 0 or target > 99999:
+            return None
+        return target
 
     def push_all(self, target_trophies=1000):
         if self._closing:

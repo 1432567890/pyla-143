@@ -64,8 +64,10 @@ class CombatAdaptationTests(unittest.TestCase):
         play.attack_cooldown = 0.0
         play.close_range_attack_cooldown_multiplier = 0.55
         play.attack_spam_enabled = True
-        play.attack_spam_cooldown_multiplier = 0.25
+        play.attack_spam_cooldown_multiplier = 0.12
         play.attack_spam_requires_los = True
+        play.aim_attack_duration = 0.02
+        play.force_release_movement_on_close_threat = False
         play.last_attack_time = 0.0
         play._suppress_attack_until = 0.0
         play._last_aim_attempt_time = 0.0
@@ -240,10 +242,10 @@ class CombatAdaptationTests(unittest.TestCase):
         play = self.make_auto_aim_play(window)
         play.attack_cooldown = 0.5
         play.attack_spam_enabled = True
-        play.attack_spam_cooldown_multiplier = 0.25
+        play.attack_spam_cooldown_multiplier = 0.12
 
         first = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
-        play.last_attack_time -= 0.14
+        play.last_attack_time -= 0.07
         second = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
 
         self.assertTrue(first)
@@ -356,11 +358,12 @@ class CombatAdaptationTests(unittest.TestCase):
 
         self.assertIsNone(play._marker_role(frame, box))
 
-    def test_close_threat_forces_movement_pause_for_repeated_aimed_attacks(self):
+    def test_close_threat_keeps_parallel_movement_for_repeated_aimed_attacks(self):
         class AimWindow:
             def __init__(self):
                 self.calls = []
                 self.enable_parallel_movement_attack = True
+                self.input_backend_supports_parallel_drag = True
 
             def aim_attack_angle(self, angle, **kwargs):
                 self.calls.append((angle, kwargs))
@@ -377,7 +380,49 @@ class CombatAdaptationTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertTrue(second)
         self.assertEqual(len(window.calls), 2)
-        self.assertTrue(all(call[1].get("force_release_movement") for call in window.calls))
+        self.assertTrue(all(not call[1].get("force_release_movement") for call in window.calls))
+        self.assertTrue(all(call[1].get("duration") == 0.02 for call in window.calls))
+
+    def test_close_threat_releases_movement_when_parallel_attack_disabled(self):
+        class AimWindow:
+            def __init__(self):
+                self.calls = []
+                self.enable_parallel_movement_attack = False
+                self.input_backend_supports_parallel_drag = True
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.calls.append((angle, kwargs))
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.attack_cooldown = 0.0
+        play.dangerous_close_range = 180
+
+        fired = play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+
+        self.assertTrue(fired)
+        self.assertTrue(window.calls[0][1].get("force_release_movement"))
+
+    def test_close_threat_can_force_release_with_config_flag(self):
+        class AimWindow:
+            def __init__(self):
+                self.calls = []
+                self.enable_parallel_movement_attack = True
+                self.input_backend_supports_parallel_drag = True
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.calls.append((angle, kwargs))
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.attack_cooldown = 0.0
+        play.dangerous_close_range = 180
+        play.force_release_movement_on_close_threat = True
+
+        fired = play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+
+        self.assertTrue(fired)
+        self.assertTrue(window.calls[0][1].get("force_release_movement"))
 
     def test_playstyle_env_exposes_biomistik_helpers(self):
         play = object.__new__(Play)
