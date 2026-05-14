@@ -35,7 +35,9 @@ directions_xy_deltas_dict = {
     "d": (150, 0),
 }
 
-BRAWL_STARS_PACKAGE = load_toml_as_dict("cfg/general_config.toml")["brawl_stars_package"]
+BRAWL_STARS_PACKAGE = str(
+    load_toml_as_dict("cfg/general_config.toml").get("brawl_stars_package", "com.supercell.brawlstars")
+).strip() or "com.supercell.brawlstars"
 
 EMULATOR_PORTS = {
     "LDPlayer": [5555, 5557, 5559, 5554],
