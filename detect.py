@@ -14,7 +14,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-debug = load_toml_as_dict("cfg/general_config.toml")["super_debug"] == "yes"
+debug = load_toml_as_dict("cfg/general_config.toml").get("super_debug", "no") == "yes"
 
 
 def get_optimal_threads(max_limit=4):
@@ -187,7 +187,7 @@ def _postprocess_raw(raw_output, conf_thresh=0.6, iou_thresh=0.6):
 
 class Detect:
     def __init__(self, model_path, ignore_classes=None, classes=None, input_size=(640, 640)):
-        self.preferred_device = load_toml_as_dict("cfg/general_config.toml")["cpu_or_gpu"]
+        self.preferred_device = load_toml_as_dict("cfg/general_config.toml").get("cpu_or_gpu", "auto")
         self.model_path = model_path
         self.classes = classes
         self.ignore_classes = set(ignore_classes) if ignore_classes else set()

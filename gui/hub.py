@@ -136,6 +136,7 @@ class Hub:
         self.general_config.setdefault("scrcpy_max_fps", 15)
         self.general_config.setdefault("onnx_cpu_threads", "auto")
         self.general_config.setdefault("used_threads", self.general_config.get("onnx_cpu_threads", "auto"))
+        self.general_config.setdefault("pyla_version", "0.8.1")
         self.general_config.setdefault("super_debug", "no")
         self.general_config.setdefault("cpu_or_gpu", "auto")
         self.general_config.setdefault("directml_device_id", "auto")

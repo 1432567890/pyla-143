@@ -29,7 +29,7 @@ from tactical_movement import (
 from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info
 
 brawl_stars_width, brawl_stars_height = 1920, 1080
-debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
+debug = load_toml_as_dict("cfg/general_config.toml").get('super_debug', 'no') == "yes"
 visual_debug = load_toml_as_dict("cfg/general_config.toml").get('visual_debug', 'no') == "yes"
 
 def vlog(*args):

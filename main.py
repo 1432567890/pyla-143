@@ -72,7 +72,7 @@ if platform.architecture()[0] != "64bit":
     print("If IPS is very low, run python tools/performance_check.py to verify ONNX and emulator frame speed.")
     print(f"Current Python: {sys.executable}")
 
-pyla_version = load_toml_as_dict("./cfg/general_config.toml")['pyla_version']
+pyla_version = load_toml_as_dict("./cfg/general_config.toml").get("pyla_version", "0.8.1")
 
 
 def parse_max_ips(value):
@@ -217,7 +217,7 @@ def pyla_main(data):
                 f"onnx_cpu_threads={general_config.get('onnx_cpu_threads', 'auto')}",
             )
             self.visual_debug = load_toml_as_dict("cfg/general_config.toml").get('visual_debug', 'no') == "yes"
-            self.run_for_minutes = int(load_toml_as_dict("cfg/general_config.toml")['run_for_minutes'])
+            self.run_for_minutes = int(load_toml_as_dict("cfg/general_config.toml").get("run_for_minutes", 0))
             self.start_time = time.time()
             self.time_to_stop = False
             self.in_cooldown = False

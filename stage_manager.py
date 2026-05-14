@@ -23,7 +23,7 @@ from utils import find_template_center, load_toml_as_dict, async_notify_user, \
 from adaptive_brain import AdaptiveBrain
 from pyla_stats import record_brawler, record_trophy_update
 
-debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
+debug = load_toml_as_dict("cfg/general_config.toml").get('super_debug', 'no') == "yes"
 
 
 def load_image(image_path, scale_factor):

@@ -20,7 +20,7 @@ STAR_DROP_TEMPLATE_THRESHOLD = 0.97
 end_results_path = r"./images/end_results/"
 
 region_data = load_toml_as_dict("./cfg/lobby_config.toml")['template_matching']
-super_debug = load_toml_as_dict("./cfg/general_config.toml")['super_debug'] == "yes"
+super_debug = load_toml_as_dict("./cfg/general_config.toml").get('super_debug', 'no') == "yes"
 _last_printed_state = None
 if super_debug:
     debug_folder = "./debug_frames/"

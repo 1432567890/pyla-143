@@ -14,7 +14,7 @@ from utils import (
     resolve_brawler_name_alias,
 )
 
-debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
+debug = load_toml_as_dict("cfg/general_config.toml").get('super_debug', 'no') == "yes"
 gray_pixels_treshold = load_toml_as_dict("./cfg/bot_config.toml")['idle_pixels_minimum']
 class LobbyAutomation:
 

@@ -40,7 +40,7 @@ width_ratio = width / orig_screen_width
 height_ratio = height / orig_screen_height
 scale_factor = min(width_ratio, height_ratio)
 scale_factor *= 96/get_dpi_scale()
-pyla_version = load_toml_as_dict("./cfg/general_config.toml")['pyla_version']
+pyla_version = load_toml_as_dict("./cfg/general_config.toml").get("pyla_version", "0.8.1")
 
 class SelectBrawler:
 
