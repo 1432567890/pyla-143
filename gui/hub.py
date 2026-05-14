@@ -132,6 +132,9 @@ class Hub:
         self.time_tresholds.setdefault("hypercharge", 2)
         self.time_tresholds.setdefault("wall_detection", 0.75)
         self.time_tresholds.setdefault("no_detection_proceed", 8.5)
+        self.time_tresholds.setdefault("check_if_brawl_stars_crashed", 10)
+        self.time_tresholds.setdefault("foreground_failure_restart_threshold", 4)
+        self.time_tresholds.setdefault("emulator_restart_cooldown", 180)
 
         # General config defaults
         self.general_config.setdefault("max_ips", "auto")

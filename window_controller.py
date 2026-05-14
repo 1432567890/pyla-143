@@ -491,15 +491,16 @@ class WindowController:
         self.PID_JOYSTICK = 1  # ID for WASD movement
         self.PID_ATTACK = 2  # ID for clicks/attacks
         self.input_backend_supports_parallel_drag = True
-        self.check_if_brawl_stars_crashed_timer = load_toml_as_dict("cfg/time_tresholds.toml")["check_if_brawl_stars_crashed"]
+        time_config = load_toml_as_dict("cfg/time_tresholds.toml")
+        self.check_if_brawl_stars_crashed_timer = float(time_config.get("check_if_brawl_stars_crashed", 10))
         self.time_since_checked_if_brawl_stars_crashed = time.time()
         self.foreground_check_failures = 0
         self.foreground_failure_restart_threshold = int(
-            load_toml_as_dict("cfg/time_tresholds.toml").get("foreground_failure_restart_threshold", 4)
+            time_config.get("foreground_failure_restart_threshold", 4)
         )
         self.last_emulator_restart_time = 0.0
         self.emulator_restart_cooldown = float(
-            load_toml_as_dict("cfg/time_tresholds.toml").get("emulator_restart_cooldown", 180)
+            time_config.get("emulator_restart_cooldown", 180)
         )
 
         # --- 2. ADB & Scrcpy Connection ---
