@@ -64,7 +64,7 @@ class CombatAdaptationTests(unittest.TestCase):
         play.attack_cooldown = 0.0
         play.close_range_attack_cooldown_multiplier = 0.55
         play.attack_spam_enabled = True
-        play.attack_spam_cooldown_multiplier = 0.45
+        play.attack_spam_cooldown_multiplier = 0.25
         play.attack_spam_requires_los = True
         play.last_attack_time = 0.0
         play._suppress_attack_until = 0.0
@@ -83,6 +83,26 @@ class CombatAdaptationTests(unittest.TestCase):
         play.enemy_velocity_confidence = 1.0
         play.track_enemy_velocity = lambda *_args: (0.0, 0.0)
         return play
+
+    def make_marker_play(self):
+        play = object.__new__(Play)
+        play.entity_marker_min_ratio = 0.012
+        play.entity_marker_min_pixels = 12
+        play.entity_marker_below_box_ratio = 0.22
+        play.entity_marker_blue_min_ratio = 0.012
+        play.entity_marker_enemy_min_ratio = 0.012
+        play.entity_marker_decision_margin = 1.25
+        play._entity_marker_cache_frame_id = None
+        play._entity_marker_score_cache = {}
+        play._perf_entity_marker_scores = 0
+        play._perf_entity_marker_cache_hits = 0
+        return play
+
+    def draw_hsv_circle_below_box(self, frame, box, hsv_color):
+        x1, y1, x2, y2 = box
+        rgb = cv2.cvtColor(np.array([[hsv_color]], dtype=np.uint8), cv2.COLOR_HSV2RGB)[0, 0]
+        center = (int((x1 + x2) / 2), int(y2 + 8))
+        cv2.circle(frame, center, 10, rgb.tolist(), -1)
 
     def test_auto_aim_attack_falls_back_to_tap_when_aim_drag_unavailable(self):
         class TapOnlyWindow:
@@ -220,10 +240,10 @@ class CombatAdaptationTests(unittest.TestCase):
         play = self.make_auto_aim_play(window)
         play.attack_cooldown = 0.5
         play.attack_spam_enabled = True
-        play.attack_spam_cooldown_multiplier = 0.45
+        play.attack_spam_cooldown_multiplier = 0.25
 
         first = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
-        play.last_attack_time -= 0.24
+        play.last_attack_time -= 0.14
         second = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
 
         self.assertTrue(first)
@@ -270,6 +290,71 @@ class CombatAdaptationTests(unittest.TestCase):
 
         self.assertFalse(fired)
         self.assertEqual(window.angles, [])
+
+    def test_low_confidence_retry_merges_missing_enemy_boxes(self):
+        class FakeDetector:
+            def __init__(self):
+                self.calls = []
+
+            def detect_objects(self, frame, conf_tresh=0.6):
+                self.calls.append(conf_tresh)
+                if len(self.calls) == 1:
+                    return {"player": [[90, 90, 130, 150]]}
+                return {
+                    "player": [[90, 90, 130, 150]],
+                    "enemy": [[300, 90, 340, 150]],
+                }
+
+        play = object.__new__(Play)
+        play.Detect_main_info = FakeDetector()
+        play.entity_detection_confidence = 0.6
+        play.entity_detection_retry_confidence = 0.35
+        play.entity_retry_when_enemy_missing = True
+        play.entity_marker_min_ratio = 0.012
+        play.entity_marker_min_pixels = 12
+        play.entity_marker_decision_margin = 1.25
+        play.player_center_bias_radius = 420
+        play.player_green_pixel_weight = 0.03
+        play.player_red_pixel_penalty = 0.05
+        play.window_controller = types.SimpleNamespace(scale_factor=1.0)
+
+        frame = np.zeros((240, 480, 3), dtype=np.uint8)
+        data = play.get_main_data(frame)
+
+        self.assertEqual(play.Detect_main_info.calls, [0.6, 0.35])
+        self.assertEqual(data["player"], [[90, 90, 130, 150]])
+        self.assertEqual(data["enemy"], [[300, 90, 340, 150]])
+        self.assertEqual(play._perf_entity_retry_count, 1)
+
+    def test_marker_role_reads_blue_circle_below_box_as_teammate(self):
+        play = self.make_marker_play()
+        frame = np.zeros((220, 260, 3), dtype=np.uint8)
+        box = [90, 80, 130, 130]
+        self.draw_hsv_circle_below_box(frame, box, [105, 220, 220])
+
+        self.assertEqual(play._marker_role(frame, box), "teammate")
+        self.assertEqual(play._marker_role(frame, box), "teammate")
+        self.assertEqual(play._perf_entity_marker_scores, 1)
+        self.assertEqual(play._perf_entity_marker_cache_hits, 1)
+
+    def test_marker_role_reads_enemy_circle_below_box_colors(self):
+        colors = ([30, 230, 230], [16, 230, 230], [2, 230, 230])
+        for hsv_color in colors:
+            with self.subTest(hsv_color=hsv_color):
+                play = self.make_marker_play()
+                frame = np.zeros((220, 260, 3), dtype=np.uint8)
+                box = [90, 80, 130, 130]
+                self.draw_hsv_circle_below_box(frame, box, hsv_color)
+
+                self.assertEqual(play._marker_role(frame, box), "enemy")
+
+    def test_marker_role_stays_neutral_on_weak_or_mixed_signal(self):
+        play = self.make_marker_play()
+        frame = np.zeros((220, 260, 3), dtype=np.uint8)
+        box = [90, 80, 130, 130]
+        self.draw_hsv_circle_below_box(frame, box, [105, 220, 35])
+
+        self.assertIsNone(play._marker_role(frame, box))
 
     def test_close_threat_forces_movement_pause_for_repeated_aimed_attacks(self):
         class AimWindow:

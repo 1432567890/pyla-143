@@ -86,6 +86,98 @@ class SuperUsageTests(unittest.TestCase):
         self.assertEqual(play.window_controller.keys[0][1], {"touch_up": True, "touch_down": False})
         self.assertEqual(play.window_controller.keys[1][0], "E")
 
+    def test_ready_valuable_super_uses_short_default_cooldown(self):
+        play = Play.__new__(Play)
+        play.window_controller = FakeWindow()
+        play.is_super_ready = True
+        play.is_hypercharge_ready = False
+        play.time_since_holding_attack = None
+        play.super_cooldown = 0.25
+        play.super_retry_cooldown_multiplier = 0.5
+        play.last_super_time = 0.0
+        play.brawler_ranges = {"shelly": (301, 490, 490)}
+        play.get_brawler_range = lambda brawler: play.brawler_ranges[brawler]
+        play.is_enemy_hittable = lambda *args, **kwargs: True
+        play.auto_aim_debug = False
+        play.attack_decision_debug = False
+
+        used = play.try_use_super_on_enemy(
+            "shelly",
+            {"super_type": "damage"},
+            player_pos=(100, 100),
+            enemy_coords=(250, 100),
+            enemy_distance=150,
+            walls=[],
+        )
+
+        self.assertTrue(used)
+        self.assertEqual(play.window_controller.keys[0][0], "E")
+
+    def test_ready_super_retry_uses_shorter_retry_cooldown(self):
+        play = Play.__new__(Play)
+        play.window_controller = FakeWindow()
+        play.is_super_ready = True
+        play.is_hypercharge_ready = False
+        play.time_since_holding_attack = None
+        play.super_cooldown = 0.25
+        play.super_retry_cooldown_multiplier = 0.5
+        play.last_super_time = 0.0
+        play.brawler_ranges = {"shelly": (301, 490, 490)}
+        play.get_brawler_range = lambda brawler: play.brawler_ranges[brawler]
+        play.is_enemy_hittable = lambda *args, **kwargs: True
+        play.auto_aim_debug = False
+        play.attack_decision_debug = False
+
+        first = play.try_use_super_on_enemy(
+            "shelly",
+            {"super_type": "damage"},
+            player_pos=(100, 100),
+            enemy_coords=(250, 100),
+            enemy_distance=150,
+            walls=[],
+        )
+        play.is_super_ready = True
+        play.last_super_time -= 0.13
+        second = play.try_use_super_on_enemy(
+            "shelly",
+            {"super_type": "damage"},
+            player_pos=(100, 100),
+            enemy_coords=(250, 100),
+            enemy_distance=150,
+            walls=[],
+        )
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual([key for key, _kwargs in play.window_controller.keys], ["E", "E"])
+
+    def test_super_still_does_not_fire_when_target_blocked(self):
+        play = Play.__new__(Play)
+        play.window_controller = FakeWindow()
+        play.is_super_ready = True
+        play.is_hypercharge_ready = False
+        play.time_since_holding_attack = None
+        play.super_cooldown = 0.0
+        play.super_retry_cooldown_multiplier = 0.5
+        play.last_super_time = 0.0
+        play.brawler_ranges = {"shelly": (301, 490, 490)}
+        play.get_brawler_range = lambda brawler: play.brawler_ranges[brawler]
+        play.is_enemy_hittable = lambda *args, **kwargs: False
+        play.auto_aim_debug = False
+        play.attack_decision_debug = False
+
+        used = play.try_use_super_on_enemy(
+            "shelly",
+            {"super_type": "damage"},
+            player_pos=(100, 100),
+            enemy_coords=(250, 100),
+            enemy_distance=150,
+            walls=[],
+        )
+
+        self.assertFalse(used)
+        self.assertEqual(play.window_controller.keys, [])
+
     def test_super_ready_does_not_survive_missed_hud_scan(self):
         play = Play.__new__(Play)
         play.ability_ready_memory_seconds = 1.25

@@ -69,7 +69,8 @@ class Movement:
         self.should_use_gadget = str(gadget_value).lower() in ("yes", "true", "1")
         self.gadget_cooldown = float(bot_config.get("gadget_cooldown", 1.0))
         self.last_gadget_time = 0.0
-        self.super_cooldown = float(bot_config.get("super_cooldown", 1.0))
+        self.super_cooldown = float(bot_config.get("super_cooldown", 0.25))
+        self.super_retry_cooldown_multiplier = float(bot_config.get("super_retry_cooldown_multiplier", 0.5))
         self.last_super_time = 0.0
         self.super_treshold = time_config.get("super", 0.1)
         self.gadget_treshold = time_config.get("gadget", 0.1)
@@ -87,7 +88,7 @@ class Movement:
         self.attack_cooldown = float(bot_config.get("attack_cooldown", 0.12))
         self.close_range_attack_cooldown_multiplier = float(bot_config.get("close_range_attack_cooldown_multiplier", 0.55))
         self.attack_spam_enabled = str(bot_config.get("attack_spam_enabled", "true")).lower() in ("yes", "true", "1")
-        self.attack_spam_cooldown_multiplier = float(bot_config.get("attack_spam_cooldown_multiplier", 0.45))
+        self.attack_spam_cooldown_multiplier = float(bot_config.get("attack_spam_cooldown_multiplier", 0.25))
         self.attack_spam_requires_los = str(bot_config.get("attack_spam_requires_los", "true")).lower() in ("yes", "true", "1")
         self.last_attack_time = 0.0
         self.TILE_SIZE = 60
@@ -329,7 +330,7 @@ class Movement:
         if self.is_attack_spam_active(brawler, decision):
             multiplier = min(
                 multiplier,
-                max(0.05, min(1.0, getattr(self, "attack_spam_cooldown_multiplier", 0.45))),
+                max(0.02, min(1.0, getattr(self, "attack_spam_cooldown_multiplier", 0.25))),
             )
         if decision.close_threat or decision.use_tap:
             multiplier = min(
@@ -446,15 +447,23 @@ class Movement:
         self.window_controller.press_key("G", delay=0.035)
         return True
 
-    def use_super(self):
-        if self.super_cooldown > 0:
+    def use_super(self, cooldown_multiplier=1.0):
+        effective_cooldown = max(0.0, self.super_cooldown * float(cooldown_multiplier))
+        if effective_cooldown > 0:
             current_time = time.time()
-            if current_time - self.last_super_time < self.super_cooldown:
+            if current_time - self.last_super_time < effective_cooldown:
                 return False
             self.last_super_time = current_time
         print("Using super")
         self.window_controller.press_key("E", delay=0.035)
         return True
+
+    def super_cooldown_remaining_ms(self, cooldown_multiplier=1.0):
+        effective_cooldown = max(0.0, self.super_cooldown * float(cooldown_multiplier))
+        if effective_cooldown <= 0:
+            return 0
+        elapsed = time.time() - getattr(self, "last_super_time", 0.0)
+        return int(max(0.0, effective_cooldown - elapsed) * 1000)
 
     @staticmethod
     def should_use_super_on_enemy(brawler, super_type, enemy_distance, attack_range, super_range, enemy_hittable):
@@ -766,6 +775,13 @@ class Play(Movement):
         self.entity_detection_retry_confidence = float(
             bot_config.get("entity_detection_retry_confidence", max(0.35, self.entity_detection_confidence - 0.20))
         )
+        self.entity_retry_when_enemy_missing = str(bot_config.get("entity_retry_when_enemy_missing", "yes")).lower() in ("yes", "true", "1")
+        self.entity_marker_min_ratio = float(bot_config.get("entity_marker_min_ratio", 0.012))
+        self.entity_marker_min_pixels = int(bot_config.get("entity_marker_min_pixels", 12))
+        self.entity_marker_below_box_ratio = float(bot_config.get("entity_marker_below_box_ratio", 0.22))
+        self.entity_marker_blue_min_ratio = float(bot_config.get("entity_marker_blue_min_ratio", 0.012))
+        self.entity_marker_enemy_min_ratio = float(bot_config.get("entity_marker_enemy_min_ratio", 0.012))
+        self.entity_marker_decision_margin = float(bot_config.get("entity_marker_decision_margin", 1.25))
         self.player_center_bias_radius = float(bot_config.get("player_center_bias_radius", 420))
         self.player_green_pixel_weight = float(bot_config.get("player_green_pixel_weight", 0.03))
         self.player_red_pixel_penalty = float(bot_config.get("player_red_pixel_penalty", 0.05))
@@ -821,6 +837,11 @@ class Play(Movement):
         self._fog_mask_cache_frame_id = None
         self._fog_mask_cache_value = None
         self._fog_mask_cache_origin = None
+        self._entity_marker_cache_frame_id = None
+        self._entity_marker_score_cache = {}
+        self._perf_entity_marker_scores = 0
+        self._perf_entity_marker_cache_hits = 0
+        self._perf_entity_retry_count = 0
         self.playstyle_name = str(bot_config.get("current_playstyle", "")).strip()
         self.playstyle_meta = {}
         self.playstyle_code = None
@@ -2661,42 +2682,75 @@ class Play(Movement):
         return green, red
 
     def _entity_marker_color_scores(self, frame, box):
+        frame_id = id(frame)
+        cache_key = tuple(map(int, self.normalize_box(box)))
+        if getattr(self, "_entity_marker_cache_frame_id", None) == frame_id:
+            cache = getattr(self, "_entity_marker_score_cache", {})
+            if cache_key in cache:
+                self._perf_entity_marker_cache_hits = getattr(self, "_perf_entity_marker_cache_hits", 0) + 1
+                return cache[cache_key]
+        else:
+            self._entity_marker_cache_frame_id = frame_id
+            self._entity_marker_score_cache = {}
+
         h, w = frame.shape[:2]
-        x1, y1, x2, y2 = map(int, self.normalize_box(box))
+        x1, y1, x2, y2 = cache_key
         bw = max(1, x2 - x1)
         bh = max(1, y2 - y1)
+        empty = {"enemy": 0.0, "teammate": 0.0, "self": 0.0, "trusted": False}
         if bw < 12 or bh < 16:
-            return {"enemy": 0.0, "teammate": 0.0, "self": 0.0, "trusted": False}
+            self._entity_marker_score_cache[cache_key] = empty
+            return empty
 
         pad_x = max(10, int(bw * 0.42))
         rx1 = max(0, x1 - pad_x)
         rx2 = min(w, x2 + pad_x)
         ry1 = max(0, int(y1 + bh * 0.48))
-        ry2 = min(h, int(y2 + bh * 0.90) + max(8, int(bh * 0.18)))
+        below_ratio = max(0.0, min(0.75, getattr(self, "entity_marker_below_box_ratio", 0.22)))
+        ry2 = min(h, int(y2 + bh * below_ratio) + max(8, int(bh * 0.18)))
         roi = frame[ry1:ry2, rx1:rx2]
         if roi.size == 0:
-            return {"enemy": 0.0, "teammate": 0.0, "self": 0.0, "trusted": False}
+            self._entity_marker_score_cache[cache_key] = empty
+            return empty
 
+        self._perf_entity_marker_scores = getattr(self, "_perf_entity_marker_scores", 0) + 1
         hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
         area = max(1, roi.shape[0] * roi.shape[1])
-        red_orange = (
-            self._count_mask_pixels(hsv, (0, 80, 70), (24, 255, 255))
-            + self._count_mask_pixels(hsv, (170, 80, 70), (179, 255, 255))
+        red = (
+            self._count_mask_pixels(hsv, (0, 75, 70), (10, 255, 255))
+            + self._count_mask_pixels(hsv, (170, 75, 70), (179, 255, 255))
         )
-        yellow = self._count_mask_pixels(hsv, (24, 70, 95), (43, 255, 255))
-        blue = self._count_mask_pixels(hsv, (92, 70, 70), (128, 255, 255))
+        orange = self._count_mask_pixels(hsv, (8, 70, 80), (26, 255, 255))
+        yellow = self._count_mask_pixels(hsv, (24, 60, 95), (45, 255, 255))
+        blue = (
+            self._count_mask_pixels(hsv, (88, 60, 70), (112, 255, 255))
+            + self._count_mask_pixels(hsv, (106, 55, 70), (136, 255, 255))
+        )
         green = self._count_mask_pixels(hsv, (36, 70, 70), (88, 255, 255))
 
-        enemy = (red_orange + yellow) / area
-        teammate = blue / area
+        enemy_pixels = red + orange + yellow
+        teammate_pixels = blue
+        enemy = enemy_pixels / area
+        teammate = teammate_pixels / area
         self_score = green / area
         strongest = max(enemy, teammate, self_score)
-        return {
+        trusted = (
+            strongest >= getattr(self, "entity_marker_min_ratio", 0.012)
+            and max(enemy_pixels, teammate_pixels, green) >= getattr(self, "entity_marker_min_pixels", 12)
+            and (
+                enemy >= getattr(self, "entity_marker_enemy_min_ratio", 0.012)
+                or teammate >= getattr(self, "entity_marker_blue_min_ratio", 0.012)
+                or self_score >= getattr(self, "entity_marker_min_ratio", 0.012)
+            )
+        )
+        result = {
             "enemy": enemy,
             "teammate": teammate,
             "self": self_score,
-            "trusted": strongest >= 0.018 and max(red_orange + yellow, blue, green) >= 18,
+            "trusted": trusted,
         }
+        self._entity_marker_score_cache[cache_key] = result
+        return result
 
     def _marker_role(self, frame, box):
         scores = self._entity_marker_color_scores(frame, box)
@@ -2707,7 +2761,7 @@ class Play(Movement):
             key=lambda item: item[1],
             reverse=True,
         )
-        if ordered[0][1] < ordered[1][1] * 1.45:
+        if ordered[0][1] < ordered[1][1] * getattr(self, "entity_marker_decision_margin", 1.25):
             return None
         return ordered[0][0]
 
@@ -2775,17 +2829,60 @@ class Play(Movement):
                 data["enemy"].extend(extra_players)
         return data
 
+    @staticmethod
+    def _box_iou(box_a, box_b):
+        ax1, ay1, ax2, ay2 = [float(value) for value in box_a[:4]]
+        bx1, by1, bx2, by2 = [float(value) for value in box_b[:4]]
+        inter_x1 = max(min(ax1, ax2), min(bx1, bx2))
+        inter_y1 = max(min(ay1, ay2), min(by1, by2))
+        inter_x2 = min(max(ax1, ax2), max(bx1, bx2))
+        inter_y2 = min(max(ay1, ay2), max(by1, by2))
+        inter_w = max(0.0, inter_x2 - inter_x1)
+        inter_h = max(0.0, inter_y2 - inter_y1)
+        intersection = inter_w * inter_h
+        area_a = max(0.0, abs(ax2 - ax1) * abs(ay2 - ay1))
+        area_b = max(0.0, abs(bx2 - bx1) * abs(by2 - by1))
+        union = area_a + area_b - intersection
+        return 0.0 if union <= 0 else intersection / union
+
+    def merge_retry_entity_data(self, data, retry_data):
+        merged = {key: [list(box) for box in boxes] for key, boxes in (data or {}).items() if boxes}
+        existing_boxes = [
+            box
+            for boxes in merged.values()
+            for box in boxes
+        ]
+        added = 0
+        for role in ("player", "enemy", "teammate"):
+            for box in retry_data.get(role) or []:
+                if any(self._box_iou(box, existing) >= 0.55 for existing in existing_boxes):
+                    continue
+                merged.setdefault(role, []).append(box)
+                existing_boxes.append(box)
+                added += 1
+        if visual_debug and added:
+            print(f"[DBG] entity retry merged {added} low-confidence boxes")
+        return merged
+
     def get_main_data(self, frame):
         data = self.Detect_main_info.detect_objects(frame, conf_tresh=self.entity_detection_confidence)
-        if not data.get("player") and self.entity_detection_retry_confidence < self.entity_detection_confidence:
+        should_retry = (
+            self.entity_detection_retry_confidence < self.entity_detection_confidence
+            and (
+                not data.get("player")
+                or (getattr(self, "entity_retry_when_enemy_missing", True) and not data.get("enemy"))
+            )
+        )
+        if should_retry:
+            self._perf_entity_retry_count = getattr(self, "_perf_entity_retry_count", 0) + 1
             retry_data = self.Detect_main_info.detect_objects(frame, conf_tresh=self.entity_detection_retry_confidence)
-            if retry_data.get("player"):
+            if retry_data.get("player") or retry_data.get("enemy") or retry_data.get("teammate"):
                 if visual_debug:
                     print(
-                        "[DBG] player recovered with lower entity threshold "
+                        "[DBG] entities recovered with lower entity threshold "
                         f"{self.entity_detection_retry_confidence:.2f}"
                     )
-                data = retry_data
+                data = self.merge_retry_entity_data(data, retry_data)
         return self.stabilize_entity_roles(frame, data)
 
     def is_path_blocked(self, player_pos, move_direction, walls, distance=None):  # Increased distance
@@ -3073,38 +3170,53 @@ class Play(Movement):
 
     def try_use_super_on_enemy(self, brawler, brawler_info, player_pos, enemy_coords, enemy_distance, walls):
         if not self.is_super_ready:
+            self._aimlog("super_decision use_super=False reason=not_ready ready=False cooldown_remaining_ms=0")
             return False
         super_type = brawler_info['super_type']
         _, attack_range, super_range = self.get_brawler_range(brawler)
         enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "super")
         near_range = min(max(super_range, attack_range * 0.75), attack_range)
+        retry_multiplier = (
+            max(0.05, min(1.0, getattr(self, "super_retry_cooldown_multiplier", 0.5)))
+            if getattr(self, "last_super_time", 0.0) > 0.0
+            else 1.0
+        )
+        cooldown_remaining_ms = self.super_cooldown_remaining_ms(retry_multiplier)
         if not self.should_use_super_on_enemy(
                 brawler, super_type, enemy_distance, attack_range, super_range, enemy_hittable
         ):
             self._aimlog(
                 "super_decision "
-                f"use_super=False reason=low_value super_type={super_type} "
+                f"use_super=False reason=low_value ready={self.is_super_ready} super_type={super_type} "
                 f"enemy_distance={int(enemy_distance)} attack_range={int(attack_range)} "
                 f"super_range={int(super_range)} near_range={int(near_range)} "
-                f"enemy_hittable={enemy_hittable}"
+                f"enemy_hittable={enemy_hittable} cooldown_remaining_ms={cooldown_remaining_ms}"
             )
             return False
 
         self._aimlog(
             "super_decision "
-            f"use_super=True reason=valuable_{super_type}_opportunity "
+            f"use_super=True reason=valuable_{super_type}_opportunity ready={self.is_super_ready} "
             f"enemy_distance={int(enemy_distance)} attack_range={int(attack_range)} "
-            f"super_range={int(super_range)} enemy_hittable={enemy_hittable}"
+            f"super_range={int(super_range)} near_range={int(near_range)} "
+            f"enemy_hittable={enemy_hittable} cooldown_remaining_ms={cooldown_remaining_ms}"
         )
         self.release_held_attack_for_super()
         if self.is_hypercharge_ready:
             self.use_hypercharge()
             self.time_since_hypercharge_checked = time.time()
             self.clear_ability_ready("hypercharge")
-        if self.use_super():
+        if self.use_super(cooldown_multiplier=retry_multiplier):
             self.time_since_super_checked = time.time()
             self.clear_ability_ready("super")
             return True
+        self._aimlog(
+            "super_decision "
+            f"use_super=False reason=super_on_cooldown ready={self.is_super_ready} super_type={super_type} "
+            f"enemy_distance={int(enemy_distance)} attack_range={int(attack_range)} "
+            f"super_range={int(super_range)} near_range={int(near_range)} "
+            f"enemy_hittable={enemy_hittable} cooldown_remaining_ms={self.super_cooldown_remaining_ms(retry_multiplier)}"
+        )
         return False
 
     def should_use_gadget_on_enemy(self, brawler, player_data, enemy_data, walls):
