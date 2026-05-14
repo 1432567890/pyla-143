@@ -75,17 +75,16 @@ else:
                     use_hypercharge()
                 use_super()
 
-        if enemy_distance <= attack_range * 1.035:
-            if is_gadget_ready and persistent_data["time_since_holding_attack"] is None:
-                use_gadget()
-            if not must_brawler_hold_attack:
-                auto_aim_attack(attack_range)
-            else:
-                enemy_hittable = should_attack_enemy(attack_range)
-                if enemy_hittable:
-                    if persistent_data["time_since_holding_attack"] is None:
-                        persistent_data["time_since_holding_attack"] = time.time()
-                        attack(touch_up=False, touch_down=True)
-                    elif time.time() - persistent_data["time_since_holding_attack"] >= brawlers_info[brawler]['hold_attack']:
-                        attack(touch_up=True, touch_down=False)
-                        persistent_data["time_since_holding_attack"] = None
+        if is_gadget_ready and persistent_data["time_since_holding_attack"] is None:
+            use_gadget()
+        if not must_brawler_hold_attack:
+            auto_aim_attack(attack_range)
+        else:
+            enemy_hittable = should_attack_enemy(attack_range)
+            if enemy_hittable:
+                if persistent_data["time_since_holding_attack"] is None:
+                    persistent_data["time_since_holding_attack"] = time.time()
+                    attack(touch_up=False, touch_down=True)
+                elif time.time() - persistent_data["time_since_holding_attack"] >= brawlers_info[brawler]['hold_attack']:
+                    attack(touch_up=True, touch_down=False)
+                    persistent_data["time_since_holding_attack"] = None

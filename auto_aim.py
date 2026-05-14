@@ -115,6 +115,27 @@ def _target_box_radius(box):
     return max(18.0, math.hypot(width, height) * 0.5)
 
 
+def _closest_point_on_box(player_pos, box):
+    x1, y1, x2, y2 = [float(value) for value in box[:4]]
+    left, right = min(x1, x2), max(x1, x2)
+    top, bottom = min(y1, y2), max(y1, y2)
+    cx, cy = (left + right) * 0.5, (top + bottom) * 0.5
+    px = min(max(float(player_pos[0]), left), right)
+    py = min(max(float(player_pos[1]), top), bottom)
+    # Nudge the edge point inside the bbox so borderline shots still aim at
+    # the target body, not at empty pixels just outside the detector box.
+    inset = min(max(2.0, (right - left) * 0.12), max(2.0, (bottom - top) * 0.12), 10.0)
+    if px < cx:
+        px = min(cx, px + inset)
+    elif px > cx:
+        px = max(cx, px - inset)
+    if py < cy:
+        py = min(cy, py + inset)
+    elif py > cy:
+        py = max(cy, py - inset)
+    return (px, py)
+
+
 def _bbox_hit_points(box):
     x1, y1, x2, y2 = [float(value) for value in box[:4]]
     cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
@@ -129,10 +150,29 @@ def _bbox_hit_points(box):
     ]
 
 
-def _clear_hit_point(player_pos, target_box, walls, can_ignore_walls, walls_block_line_of_sight):
-    for point in _bbox_hit_points(target_box):
+def _dedupe_points(points):
+    seen = set()
+    result = []
+    for point in points:
+        key = (round(float(point[0]), 3), round(float(point[1]), 3))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(point)
+    return result
+
+
+def _clear_hit_point(player_pos, target_box, walls, can_ignore_walls, walls_block_line_of_sight, max_distance=None):
+    points = _dedupe_points([_closest_point_on_box(player_pos, target_box)] + _bbox_hit_points(target_box))
+    candidates = []
+    for index, point in enumerate(points):
         if _line_of_sight_clear(player_pos, point, walls, can_ignore_walls, walls_block_line_of_sight):
-            return point
+            distance = math.hypot(point[0] - player_pos[0], point[1] - player_pos[1])
+            in_window = max_distance is None or distance <= max_distance
+            candidates.append((0 if in_window else 1, 0 if index == 1 else 1, distance, point))
+    if candidates:
+        candidates.sort(key=lambda item: item[:3])
+        return candidates[0][3]
     return None
 
 
@@ -217,18 +257,32 @@ def choose_auto_aim(
 
     closest_enemy_distance = None
     for enemy in enemy_data:
-        target = _center(enemy)
+        center = _center(enemy)
+        center_distance = math.hypot(center[0] - player_pos[0], center[1] - player_pos[1])
+        if closest_enemy_distance is None or center_distance < closest_enemy_distance:
+            closest_enemy_distance = center_distance
+        closest_box_point = _closest_point_on_box(player_pos, enemy)
+        closest_box_distance = math.hypot(closest_box_point[0] - player_pos[0], closest_box_point[1] - player_pos[1])
+        clear_target = _clear_hit_point(
+            player_pos,
+            enemy,
+            walls,
+            can_ignore_walls,
+            walls_block_line_of_sight,
+            max_distance=attack_window,
+        )
+        target = clear_target if clear_target is not None else center
         distance = math.hypot(target[0] - player_pos[0], target[1] - player_pos[1])
-        if closest_enemy_distance is None or distance < closest_enemy_distance:
-            closest_enemy_distance = distance
-        in_range = distance <= attack_window
-        close_override = bool(close_range_override and distance <= dangerous_close_range)
-        use_tap = distance <= close_tap_range
+        range_distance = distance if clear_target is not None else closest_box_distance
+        threat_distance = min(center_distance, range_distance)
+        in_range = range_distance <= attack_window
+        close_override = bool(close_range_override and threat_distance <= dangerous_close_range)
+        use_tap = threat_distance <= close_tap_range
         if not in_range:
             decision = AttackDecision(
                 False,
-                target=target,
-                distance=distance,
+                target=center,
+                distance=range_distance,
                 attack_range=attack_range,
                 in_range=False,
                 line_of_sight=False,
@@ -247,13 +301,12 @@ def choose_auto_aim(
                 best = decision
             continue
 
-        clear_target = _clear_hit_point(player_pos, enemy, walls, can_ignore_walls, walls_block_line_of_sight)
         target_los_clear = clear_target is not None
         if not target_los_clear:
             decision = AttackDecision(
                 False,
-                target=target,
-                distance=distance,
+                target=center,
+                distance=range_distance,
                 attack_range=attack_range,
                 in_range=True,
                 line_of_sight=False,
@@ -271,8 +324,6 @@ def choose_auto_aim(
             if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
                 best = decision
             continue
-        if clear_target != target:
-            target = clear_target
 
         velocity = track_enemy_velocity(target, current_time)
         current_velocity_confidence = (

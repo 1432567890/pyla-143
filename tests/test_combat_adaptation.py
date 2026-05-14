@@ -163,6 +163,28 @@ class CombatAdaptationTests(unittest.TestCase):
         self.assertFalse(blocked)
         self.assertIsNone(blocked_window.angle)
 
+    def test_valid_in_range_shot_is_not_delayed_by_defensive_suppression(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+                self.kwargs = None
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angle = angle
+                self.kwargs = kwargs
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.attack_cooldown = 0.0
+        play.dangerous_close_range = 120
+        play._suppress_attack_until = time.time() + 1.0
+
+        fired = play.auto_aim_attack("shelly", (0, 0), [[430, -18, 470, 18]], [], attack_range=520)
+
+        self.assertTrue(fired)
+        self.assertIsNotNone(window.angle)
+        self.assertFalse(window.kwargs.get("force_release_movement"))
+
     def test_auto_aim_cooldown_still_blocks_repeated_shots(self):
         class AimWindow:
             def __init__(self):

@@ -296,6 +296,27 @@ class AutoAimTests(unittest.TestCase):
         self.assertTrue(decision.in_range)
         self.assertTrue(decision.should_fire)
 
+    def test_bbox_edge_in_range_fires_even_when_center_is_outside_range(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[96, -18, 132, 18]],
+            walls=[],
+            attack_range=100,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+        )
+
+        self.assertTrue(decision.in_range)
+        self.assertTrue(decision.should_fire)
+        self.assertLessEqual(decision.distance, 100 * 1.035)
+        self.assertGreaterEqual(decision.target[0], 96)
+        self.assertLessEqual(decision.target[0], 132)
+
     def test_close_prediction_stays_on_live_bbox_center(self):
         decision = choose_auto_aim(
             player_pos=(0, 0),

@@ -346,18 +346,6 @@ class Movement:
             _, attack_range, _ = self.get_brawler_range(brawler)
         if decision is None:
             decision = self.choose_attack_decision(brawler, player_pos, enemy_data, walls, attack_range=attack_range, current_time=now)
-        suppress_until = getattr(self, "_suppress_attack_until", 0.0)
-        if now < suppress_until and not decision.close_threat:
-            remaining = int((getattr(self, "_suppress_attack_until", 0.0) - now) * 1000)
-            decision.cooldown_remaining_ms = remaining
-            self.log_attack_decision(
-                decision,
-                attack_range,
-                aim_frequency_hz=aim_frequency_hz,
-                input_busy=True,
-                denied_by="defensive_retreat_active",
-            )
-            return False
         input_mode = "tap" if decision.use_tap else "aimed_drag"
         if not getattr(self, "aimed_attacks_enabled", False) or not hasattr(self.window_controller, "aim_attack_angle"):
             input_mode = "tap_fallback"
@@ -2526,15 +2514,13 @@ class Play(Movement):
         attack_denied_by = None
         if not attack_decision.should_fire:
             attack_denied_by = attack_decision.denied_by or attack_decision.reason
-        elif heal_active and enemy_distance > self.heal_attack_only_close_range and not attack_decision.close_threat:
-            attack_denied_by = "healing_retreat"
-        elif not intent_attack_allowed and not attack_decision.close_threat:
-            attack_denied_by = "movement_intent_blocks_attack"
-        else:
-            suppress_until = getattr(self, "_suppress_attack_until", 0.0)
-            if time.time() < suppress_until and not attack_decision.close_threat:
-                attack_denied_by = "defensive_retreat_active"
-                attack_decision.cooldown_remaining_ms = int((suppress_until - time.time()) * 1000)
+        elif (heal_active or not intent_attack_allowed or time.time() < getattr(self, "_suppress_attack_until", 0.0)) and getattr(self, "attack_decision_debug", False):
+            self._aimlog(
+                "attack_defensive_gate_ignored "
+                f"heal_active={heal_active} intent_attack_allowed={intent_attack_allowed} "
+                f"suppress_remaining_ms={max(0, int((getattr(self, '_suppress_attack_until', 0.0) - time.time()) * 1000))} "
+                f"selected_distance={int(attack_decision.distance or enemy_distance)} attack_range={int(attack_range)}"
+            )
 
         if attack_denied_by:
             self.log_attack_decision(
@@ -3471,34 +3457,52 @@ class Play(Movement):
 
         self.try_use_super_on_enemy(brawler, brawler_info, player_pos, enemy_coords, enemy_distance, walls)
 
-        # Attack if enemy is within attack range and hittable
-        if enemy_distance <= attack_range:
-            enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "attack")
-            if enemy_hittable:
-                if self.strafe_enabled:
-                    toward_angle = self.angle_from_direction(direction_x, direction_y)
-                    desired = self.apply_combat_dodge(
-                        self.angle_from_direction(*self.movement_to_vector(movement)),
-                        toward_angle,
-                        current_time,
-                        enemy_distance,
-                        safe_range,
-                    )
-                    movement = self.find_best_angle(player_pos, desired, walls)
-                if self.should_use_gadget_on_enemy(brawler, player_data, enemy_data, walls):
-                    if self.use_gadget():
-                        self.time_since_gadget_checked = time.time()
-                        self.clear_ability_ready("gadget")
+        attack_decision = self.choose_attack_decision(
+            brawler,
+            player_pos,
+            enemy_data,
+            walls,
+            attack_range=attack_range,
+            current_time=current_time,
+        )
+        if attack_decision.should_fire:
+            if self.strafe_enabled:
+                toward_angle = self.angle_from_direction(direction_x, direction_y)
+                desired = self.apply_combat_dodge(
+                    self.angle_from_direction(*self.movement_to_vector(movement)),
+                    toward_angle,
+                    current_time,
+                    enemy_distance,
+                    safe_range,
+                )
+                movement = self.find_best_angle(player_pos, desired, walls)
+            if self.should_use_gadget_on_enemy(brawler, player_data, enemy_data, walls):
+                if self.use_gadget():
+                    self.time_since_gadget_checked = time.time()
+                    self.clear_ability_ready("gadget")
 
-                if not must_brawler_hold_attack:
-                    self.attack()
-                else:
-                    if self.time_since_holding_attack is None:
-                        self.time_since_holding_attack = time.time()
-                        self.attack(touch_up=False, touch_down=True)
-                    elif time.time() - self.time_since_holding_attack >= self.brawlers_info[brawler]['hold_attack']:
-                        self.attack(touch_up=True, touch_down=False)
-                        self.time_since_holding_attack = None
+            if not must_brawler_hold_attack:
+                self.auto_aim_attack(
+                    brawler,
+                    player_pos,
+                    enemy_data,
+                    walls,
+                    attack_range=attack_range,
+                    decision=attack_decision,
+                )
+            else:
+                if self.time_since_holding_attack is None:
+                    self.time_since_holding_attack = time.time()
+                    self.attack(touch_up=False, touch_down=True)
+                elif time.time() - self.time_since_holding_attack >= self.brawlers_info[brawler]['hold_attack']:
+                    self.attack(touch_up=True, touch_down=False)
+                    self.time_since_holding_attack = None
+        elif attack_decision.visible_enemy_count:
+            self.log_attack_decision(
+                attack_decision,
+                attack_range,
+                denied_by=attack_decision.denied_by or attack_decision.reason,
+            )
 
 
         return movement
