@@ -142,6 +142,50 @@ class AutoAimTests(unittest.TestCase):
         self.assertTrue(decision.should_fire)
         self.assertTrue(decision.close_range_override)
 
+    def test_close_target_snaps_prediction_to_live_center(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[70, -4, 78, 4]],
+            walls=[],
+            attack_range=260,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (900.0, 450.0),
+            velocity_confidence=1.0,
+            projectile_speed=500,
+            current_time=1.0,
+            min_confidence=0.99,
+            close_tap_range=20,
+            dangerous_close_range=120,
+            close_range_override=True,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.predicted, decision.target)
+        self.assertEqual(decision.aim_fallback_reason, "close_snap_to_target")
+
+    def test_mid_range_prediction_clamps_to_hit_lane(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[250, -10, 270, 10]],
+            walls=[],
+            attack_range=520,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 1200.0),
+            velocity_confidence=1.0,
+            projectile_speed=700,
+            current_time=1.0,
+            min_confidence=0.50,
+            close_tap_range=40,
+            dangerous_close_range=120,
+            close_range_override=True,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertLess(decision.predicted[1], 90)
+        self.assertEqual(decision.aim_fallback_reason, "lead_clamped")
+
     def test_prioritizes_close_threat_over_far_confident_target(self):
         decision = choose_auto_aim(
             player_pos=(0, 0),

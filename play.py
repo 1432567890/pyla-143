@@ -299,6 +299,7 @@ class Movement:
         close_tap_range = close_tap_range if close_tap_range > 0 else None
         close_los_override_range = getattr(self, "auto_aim_close_los_override_range", 0)
         close_los_override_range = close_los_override_range if close_los_override_range > 0 else None
+        lead_shots_enabled = getattr(self, "lead_shots_enabled", True)
         decision = choose_auto_aim(
             player_pos=player_pos,
             enemy_data=enemy_data,
@@ -306,8 +307,8 @@ class Movement:
             attack_range=attack_range,
             can_ignore_walls=can_ignore_walls,
             walls_block_line_of_sight=self.walls_block_line_of_sight,
-            track_enemy_velocity=self.track_enemy_velocity,
-            velocity_confidence=lambda: getattr(self, "enemy_velocity_confidence", 0.0),
+            track_enemy_velocity=self.track_enemy_velocity if lead_shots_enabled else (lambda *_args: (0.0, 0.0)),
+            velocity_confidence=(lambda: getattr(self, "enemy_velocity_confidence", 0.0)) if lead_shots_enabled else 0.0,
             projectile_speed=self.projectile_speed_px_s,
             current_time=now,
             aim_line_angle=aim_line_angle,
@@ -321,6 +322,9 @@ class Movement:
         predicted_s = tuple(map(int, decision.predicted)) if decision.predicted else None
         angle_s = None if decision.aim_angle is None else round(decision.aim_angle, 1)
         dist_s = None if decision.distance is None else int(decision.distance)
+        input_mode = "tap" if decision.use_tap else "aimed_drag"
+        if not getattr(self, "aimed_attacks_enabled", False) or not hasattr(self.window_controller, "aim_attack_angle"):
+            input_mode = "tap_fallback"
         self._aimlog(
             "attack_decision "
             f"attack_allowed={decision.should_fire} visible_enemy_count={decision.visible_enemy_count} "
@@ -329,7 +333,8 @@ class Movement:
             f"predicted_point={predicted_s} angle={angle_s} confidence={decision.confidence:.2f} "
             f"confidence_threshold={decision.threshold:.2f} close_range_override={decision.close_range_override} "
             f"line_of_sight={decision.los_status} input_busy=False aim_frequency_hz={aim_frequency_hz:.2f} "
-            f"tap={decision.use_tap} reason={decision.reason}"
+            f"input_mode={input_mode} tap={decision.use_tap} "
+            f"fallback_reason={decision.aim_fallback_reason or 'none'} reason={decision.reason}"
         )
         if not decision.should_fire:
             self._aimlog(f"attack_denied_reason={decision.reason}")
@@ -337,7 +342,11 @@ class Movement:
         cooldown_multiplier = 1.0
         if decision.close_range_override or decision.use_tap:
             cooldown_multiplier = max(0.25, min(1.0, getattr(self, "close_range_attack_cooldown_multiplier", 0.55)))
-        if decision.use_tap:
+        if (
+            decision.use_tap
+            or not getattr(self, "aimed_attacks_enabled", False)
+            or not hasattr(self.window_controller, "aim_attack_angle")
+        ):
             return self.attack(cooldown_multiplier=cooldown_multiplier)
         effective_cooldown = max(0.0, self.attack_cooldown * cooldown_multiplier)
         if effective_cooldown > 0:
@@ -356,11 +365,8 @@ class Movement:
                 )
                 return False
             self.last_attack_time = current_time
-        if hasattr(self.window_controller, "aim_attack_angle"):
-            self.window_controller.aim_attack_angle(decision.aim_angle)
-            return True
-        self._aimlog("skip: aim_attack_angle_unavailable")
-        return False
+        self.window_controller.aim_attack_angle(decision.aim_angle)
+        return True
 
     def use_hypercharge(self):
         print("Using hypercharge")

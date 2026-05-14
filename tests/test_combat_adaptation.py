@@ -52,6 +52,66 @@ class CombatAdaptationTests(unittest.TestCase):
         self.assertEqual(self.movement.movement_to_vector("wd"), (1, -1))
         self.assertEqual(self.movement.movement_to_vector("as"), (-1, 1))
 
+    def make_auto_aim_play(self, window_controller):
+        play = object.__new__(Play)
+        play.window_controller = window_controller
+        play.brawlers_info = {"shelly": {"ignore_walls_for_attacks": False}}
+        play.attack_cooldown = 0.0
+        play.close_range_attack_cooldown_multiplier = 0.55
+        play.last_attack_time = 0.0
+        play._suppress_attack_until = 0.0
+        play._last_aim_attempt_time = 0.0
+        play.auto_aim_debug = False
+        play.attack_decision_debug = False
+        play.current_frame = None
+        play.projectile_speed_px_s = 700.0
+        play.auto_aim_min_confidence = 0.54
+        play.auto_aim_close_tap_range = 0
+        play.auto_aim_close_los_override_range = 0
+        play.close_range_attack_override = True
+        play.dangerous_close_range = 120
+        play.lead_shots_enabled = True
+        play.aimed_attacks_enabled = True
+        play.enemy_velocity_confidence = 1.0
+        play.track_enemy_velocity = lambda *_args: (0.0, 0.0)
+        return play
+
+    def test_auto_aim_attack_falls_back_to_tap_when_aim_drag_unavailable(self):
+        class TapOnlyWindow:
+            def __init__(self):
+                self.keys = []
+
+            def press_key(self, key, **kwargs):
+                self.keys.append((key, kwargs))
+
+        window = TapOnlyWindow()
+        play = self.make_auto_aim_play(window)
+        play.aimed_attacks_enabled = False
+
+        fired = play.auto_aim_attack("shelly", (0, 0), [[80, -12, 104, 12]], [], attack_range=260)
+
+        self.assertTrue(fired)
+        self.assertEqual(window.keys[0][0], "M")
+
+    def test_auto_aim_attack_disables_prediction_when_lead_shots_off(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+
+            def aim_attack_angle(self, angle):
+                self.angle = angle
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.lead_shots_enabled = False
+        play.track_enemy_velocity = lambda *_args: (0.0, 900.0)
+        play.enemy_velocity_confidence = 1.0
+
+        fired = play.auto_aim_attack("shelly", (0, 0), [[250, -10, 270, 10]], [], attack_range=520)
+
+        self.assertTrue(fired)
+        self.assertAlmostEqual(window.angle, 0.0)
+
     def test_playstyle_env_exposes_biomistik_helpers(self):
         play = object.__new__(Play)
         play.playstyle_code = compile(

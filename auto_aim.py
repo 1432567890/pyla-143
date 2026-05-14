@@ -21,6 +21,7 @@ class AutoAimDecision:
     cooldown_remaining_ms: int = 0
     visible_enemy_count: int = 0
     closest_enemy_distance: float = None
+    aim_fallback_reason: str = ""
 
 
 def _center(box):
@@ -99,6 +100,40 @@ def _target_box_score(box):
     if area < 500:
         return 0.55
     return 1.0
+
+
+def _target_box_radius(box):
+    width = abs(float(box[2]) - float(box[0]))
+    height = abs(float(box[3]) - float(box[1]))
+    return max(18.0, math.hypot(width, height) * 0.5)
+
+
+def _clamp_prediction_to_lane(player_pos, target, predicted, lead_distance, attack_range, target_box, close_override):
+    if lead_distance <= 0:
+        return predicted, lead_distance, ""
+    if close_override:
+        return target, 0.0, "close_snap_to_target"
+
+    target_distance = math.hypot(target[0] - player_pos[0], target[1] - player_pos[1])
+    lane_radius = _target_box_radius(target_box)
+    target_angle = _angle_from_direction(target[0] - player_pos[0], target[1] - player_pos[1])
+    predicted_angle = _angle_from_direction(predicted[0] - player_pos[0], predicted[1] - player_pos[1])
+    angle_mismatch = _angle_delta(target_angle, predicted_angle)
+
+    if target_distance <= attack_range * 0.65:
+        max_lead = max(lane_radius * 1.5, min(75.0, attack_range * 0.14))
+        if lead_distance > max_lead:
+            scale = max_lead / lead_distance
+            return (
+                (target[0] + (predicted[0] - target[0]) * scale, target[1] + (predicted[1] - target[1]) * scale),
+                max_lead,
+                "lead_clamped",
+            )
+
+    if target_distance <= attack_range * 0.75 and lead_distance > lane_radius * 2.5 and angle_mismatch > 18.0:
+        return target, 0.0, "lead_left_hit_lane"
+
+    return predicted, lead_distance, ""
 
 
 def _line_of_sight_clear(player_pos, target_pos, walls, can_ignore_walls, walls_block_line_of_sight):
@@ -197,6 +232,15 @@ def choose_auto_aim(
             current_velocity_confidence,
             attack_range,
         )
+        predicted, lead_distance, aim_fallback_reason = _clamp_prediction_to_lane(
+            player_pos,
+            target,
+            predicted,
+            lead_distance,
+            attack_range,
+            enemy,
+            close_override,
+        )
         predicted_distance = math.hypot(predicted[0] - player_pos[0], predicted[1] - player_pos[1])
         # Lead can push the aim point past attack_range*1.04 even when the enemy
         # bbox center is well inside range (common in melee). Snap to the live
@@ -210,6 +254,7 @@ def choose_auto_aim(
             predicted = target
             predicted_distance = distance
             lead_distance = 0.0
+            aim_fallback_reason = "melee_prediction_snap"
         if predicted_distance > attack_range * 1.04:
             decision = AutoAimDecision(
                 False,
@@ -222,6 +267,7 @@ def choose_auto_aim(
                 target_bbox=tuple(enemy),
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
+                aim_fallback_reason=aim_fallback_reason,
             )
             if best is None or predicted_distance < (best.distance or float("inf")):
                 best = decision
@@ -248,6 +294,8 @@ def choose_auto_aim(
         if not predicted_los_clear and close_override:
             predicted = target
             predicted_distance = distance
+            lead_distance = 0.0
+            aim_fallback_reason = aim_fallback_reason or "close_los_snap_to_target"
 
         angle = _angle_from_direction(predicted[0] - player_pos[0], predicted[1] - player_pos[1])
         confidence = 1.0
@@ -296,6 +344,7 @@ def choose_auto_aim(
             target_bbox=tuple(enemy),
             visible_enemy_count=visible_enemy_count,
             closest_enemy_distance=closest_enemy_distance,
+            aim_fallback_reason=aim_fallback_reason,
         )
 
         if best is None:
