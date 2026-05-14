@@ -3,18 +3,22 @@ from dataclasses import dataclass
 
 
 @dataclass
-class AutoAimDecision:
+class AttackDecision:
     should_fire: bool
     aim_angle: float = None
     target: tuple = None
     predicted: tuple = None
     distance: float = None
     attack_range: float = None
+    in_range: bool = False
+    line_of_sight: bool = False
     confidence: float = 0.0
     reason: str = ""
+    denied_by: str = ""
     use_tap: bool = False
     velocity: tuple = (0.0, 0.0)
     threshold: float = 0.0
+    close_threat: bool = False
     close_range_override: bool = False
     los_status: str = "unknown"
     target_bbox: tuple = None
@@ -22,6 +26,9 @@ class AutoAimDecision:
     visible_enemy_count: int = 0
     closest_enemy_distance: float = None
     aim_fallback_reason: str = ""
+
+
+AutoAimDecision = AttackDecision
 
 
 def _center(box):
@@ -108,6 +115,27 @@ def _target_box_radius(box):
     return max(18.0, math.hypot(width, height) * 0.5)
 
 
+def _bbox_hit_points(box):
+    x1, y1, x2, y2 = [float(value) for value in box[:4]]
+    cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
+    inset_x = max(2.0, abs(x2 - x1) * 0.28)
+    inset_y = max(2.0, abs(y2 - y1) * 0.28)
+    return [
+        (cx, cy),
+        (max(x1, cx - inset_x), cy),
+        (min(x2, cx + inset_x), cy),
+        (cx, max(y1, cy - inset_y)),
+        (cx, min(y2, cy + inset_y)),
+    ]
+
+
+def _clear_hit_point(player_pos, target_box, walls, can_ignore_walls, walls_block_line_of_sight):
+    for point in _bbox_hit_points(target_box):
+        if _line_of_sight_clear(player_pos, point, walls, can_ignore_walls, walls_block_line_of_sight):
+            return point
+    return None
+
+
 def _clamp_prediction_to_lane(player_pos, target, predicted, lead_distance, attack_range, target_box, close_override):
     if lead_distance <= 0:
         return predicted, lead_distance, ""
@@ -142,6 +170,14 @@ def _line_of_sight_clear(player_pos, target_pos, walls, can_ignore_walls, walls_
     return not walls_block_line_of_sight(player_pos, target_pos, walls)
 
 
+def _decision_sort_key(decision, dangerous_close_range):
+    distance = decision.distance if decision.distance is not None else float("inf")
+    if decision.should_fire:
+        return (0, 0 if decision.close_threat else 1, distance, -(decision.confidence or 0.0))
+    diagnostic_close = distance <= dangerous_close_range
+    return (1, 0 if diagnostic_close else 1, distance, -(decision.confidence or 0.0))
+
+
 def choose_auto_aim(
     *,
     player_pos,
@@ -162,12 +198,12 @@ def choose_auto_aim(
     close_los_override_range=None,
 ):
     if not player_pos:
-        return AutoAimDecision(False, reason="target_invalid")
+        return AttackDecision(False, reason="target_invalid", denied_by="target_invalid")
     visible_enemy_count = len(enemy_data or [])
     if not enemy_data:
-        return AutoAimDecision(False, reason="no_enemy", visible_enemy_count=0)
+        return AttackDecision(False, reason="no_enemy", denied_by="no_enemy", visible_enemy_count=0)
     if attack_range <= 0:
-        return AutoAimDecision(False, reason="target_invalid", attack_range=attack_range)
+        return AttackDecision(False, reason="target_invalid", denied_by="target_invalid", attack_range=attack_range)
 
     close_tap_range = close_tap_range if close_tap_range is not None else min(120.0, attack_range * 0.28)
     dangerous_close_range = dangerous_close_range if dangerous_close_range is not None else max(close_tap_range, min(150.0, attack_range * 0.40))
@@ -176,6 +212,7 @@ def choose_auto_aim(
         if close_los_override_range is not None
         else min(dangerous_close_range, max(close_tap_range, attack_range * 0.45))
     )
+    attack_window = float(attack_range) * 1.035
     best = None
 
     closest_enemy_distance = None
@@ -184,39 +221,58 @@ def choose_auto_aim(
         distance = math.hypot(target[0] - player_pos[0], target[1] - player_pos[1])
         if closest_enemy_distance is None or distance < closest_enemy_distance:
             closest_enemy_distance = distance
-        if distance > attack_range:
-            decision = AutoAimDecision(
+        in_range = distance <= attack_window
+        close_override = bool(close_range_override and distance <= dangerous_close_range)
+        use_tap = distance <= close_tap_range
+        if not in_range:
+            decision = AttackDecision(
                 False,
                 target=target,
                 distance=distance,
                 attack_range=attack_range,
+                in_range=False,
+                line_of_sight=False,
                 reason="enemy_out_of_range",
+                denied_by="out_of_range",
+                use_tap=use_tap,
+                threshold=min_confidence,
+                close_threat=close_override,
+                close_range_override=close_override,
+                los_status="not_checked",
                 target_bbox=tuple(enemy),
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
             )
-            if best is None or distance < (best.distance or float("inf")):
+            if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
                 best = decision
             continue
 
-        close_override = bool(close_range_override and distance <= dangerous_close_range)
-        close_los_override = bool(close_override and distance <= close_los_override_range)
-        target_los_clear = _line_of_sight_clear(player_pos, target, walls, can_ignore_walls, walls_block_line_of_sight)
-        if not target_los_clear and not close_los_override:
-            decision = AutoAimDecision(
+        clear_target = _clear_hit_point(player_pos, enemy, walls, can_ignore_walls, walls_block_line_of_sight)
+        target_los_clear = clear_target is not None
+        if not target_los_clear:
+            decision = AttackDecision(
                 False,
                 target=target,
                 distance=distance,
                 attack_range=attack_range,
+                in_range=True,
+                line_of_sight=False,
                 reason="los_blocked",
+                denied_by="los_blocked",
+                use_tap=use_tap,
+                threshold=min_confidence,
+                close_threat=close_override,
+                close_range_override=close_override,
                 los_status="blocked",
                 target_bbox=tuple(enemy),
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
             )
-            if best is None or distance < (best.distance or float("inf")):
+            if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
                 best = decision
             continue
+        if clear_target != target:
+            target = clear_target
 
         velocity = track_enemy_velocity(target, current_time)
         current_velocity_confidence = (
@@ -256,39 +312,54 @@ def choose_auto_aim(
             lead_distance = 0.0
             aim_fallback_reason = "melee_prediction_snap"
         if predicted_distance > attack_range * 1.04:
-            decision = AutoAimDecision(
+            decision = AttackDecision(
                 False,
                 target=target,
                 predicted=predicted,
                 distance=predicted_distance,
                 attack_range=attack_range,
+                in_range=True,
+                line_of_sight=True,
                 velocity=velocity,
                 reason="prediction_invalid",
+                denied_by="prediction_invalid",
+                use_tap=use_tap,
+                threshold=min_confidence,
+                close_threat=close_override,
+                close_range_override=close_override,
+                los_status="clear",
                 target_bbox=tuple(enemy),
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
                 aim_fallback_reason=aim_fallback_reason,
             )
-            if best is None or predicted_distance < (best.distance or float("inf")):
+            if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
                 best = decision
             continue
 
         predicted_los_clear = _line_of_sight_clear(player_pos, predicted, walls, can_ignore_walls, walls_block_line_of_sight)
         if not predicted_los_clear and not close_override:
-            decision = AutoAimDecision(
+            decision = AttackDecision(
                 False,
                 target=target,
                 predicted=predicted,
                 distance=predicted_distance,
                 attack_range=attack_range,
+                in_range=True,
+                line_of_sight=False,
                 velocity=velocity,
                 reason="los_blocked",
+                denied_by="los_blocked",
+                use_tap=use_tap,
+                threshold=min_confidence,
+                close_threat=close_override,
+                close_range_override=close_override,
                 los_status="predicted_blocked",
                 target_bbox=tuple(enemy),
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
             )
-            if best is None or predicted_distance < (best.distance or float("inf")):
+            if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
                 best = decision
             continue
         if not predicted_los_clear and close_override:
@@ -296,6 +367,7 @@ def choose_auto_aim(
             predicted_distance = distance
             lead_distance = 0.0
             aim_fallback_reason = aim_fallback_reason or "close_los_snap_to_target"
+            predicted_los_clear = True
 
         angle = _angle_from_direction(predicted[0] - player_pos[0], predicted[1] - player_pos[1])
         confidence = 1.0
@@ -317,7 +389,6 @@ def choose_auto_aim(
             else:
                 confidence *= 0.65
 
-        use_tap = distance <= close_tap_range
         should_fire = confidence >= min_confidence or (close_override and confidence >= 0.18) or use_tap
         if should_fire:
             reason = "ok"
@@ -327,43 +398,41 @@ def choose_auto_aim(
                 reason = "close_tap"
         else:
             reason = "confidence_too_low"
-        decision = AutoAimDecision(
+        decision = AttackDecision(
             should_fire,
             aim_angle=angle,
             target=target,
             predicted=predicted,
             distance=predicted_distance,
             attack_range=attack_range,
+            in_range=True,
+            line_of_sight=bool(target_los_clear and predicted_los_clear),
             confidence=max(0.0, min(1.0, confidence)),
             reason=reason,
+            denied_by="" if should_fire else "confidence_too_low",
             use_tap=use_tap,
             velocity=velocity,
             threshold=min_confidence,
+            close_threat=close_override,
             close_range_override=close_override,
-            los_status="clear" if target_los_clear and predicted_los_clear else "close_override",
+            los_status="clear" if target_los_clear and predicted_los_clear else "predicted_snap",
             target_bbox=tuple(enemy),
             visible_enemy_count=visible_enemy_count,
             closest_enemy_distance=closest_enemy_distance,
             aim_fallback_reason=aim_fallback_reason,
         )
 
-        if best is None:
-            best = decision
-            continue
-        best_close = bool(best.distance is not None and best.distance <= dangerous_close_range)
-        decision_close = bool(decision.distance is not None and decision.distance <= dangerous_close_range)
-        best_key = (0 if best.should_fire else 1, 0 if best_close else 1, best.distance or float("inf"), -(best.confidence or 0))
-        decision_key = (0 if decision.should_fire else 1, 0 if decision_close else 1, decision.distance or float("inf"), -(decision.confidence or 0))
-        if decision_key < best_key:
+        if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
             best = decision
 
     if best:
         best.visible_enemy_count = visible_enemy_count
         best.closest_enemy_distance = closest_enemy_distance
         return best
-    return AutoAimDecision(
+    return AttackDecision(
         False,
         reason="no_valid_target",
+        denied_by="no_valid_target",
         attack_range=attack_range,
         visible_enemy_count=visible_enemy_count,
         closest_enemy_distance=closest_enemy_distance,

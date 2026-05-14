@@ -1,8 +1,13 @@
 import math
+import sys
+import time
+import types
 import unittest
 
 import cv2
 import numpy as np
+
+sys.modules.setdefault("onnxruntime", types.SimpleNamespace(InferenceSession=None))
 
 from play import Play
 
@@ -111,6 +116,72 @@ class CombatAdaptationTests(unittest.TestCase):
 
         self.assertTrue(fired)
         self.assertAlmostEqual(window.angle, 0.0)
+
+    def test_close_visible_enemy_with_clear_los_fires_while_moving_toward_enemy(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+
+            def aim_attack_angle(self, angle):
+                self.angle = angle
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.last_movement = "D"
+        play.keys_hold = ["d"]
+
+        fired = play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+
+        self.assertTrue(fired)
+        self.assertIsNotNone(window.angle)
+        self.assertAlmostEqual(window.angle, 0.0)
+
+    def test_close_visible_enemy_overrides_defensive_suppression_only_with_clear_los(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+
+            def aim_attack_angle(self, angle):
+                self.angle = angle
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play._suppress_attack_until = time.time() + 1.0
+
+        fired = play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+
+        self.assertTrue(fired)
+        self.assertIsNotNone(window.angle)
+
+        blocked_window = AimWindow()
+        blocked_play = self.make_auto_aim_play(blocked_window)
+        blocked_play._suppress_attack_until = time.time() + 1.0
+        blocked_play.walls_block_line_of_sight = lambda *_args, **_kwargs: True
+
+        blocked = blocked_play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+
+        self.assertFalse(blocked)
+        self.assertIsNone(blocked_window.angle)
+
+    def test_auto_aim_cooldown_still_blocks_repeated_shots(self):
+        class AimWindow:
+            def __init__(self):
+                self.angles = []
+
+            def aim_attack_angle(self, angle):
+                self.angles.append(angle)
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.attack_cooldown = 0.5
+        play.last_attack_time = 0.0
+
+        first = play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+        second = play.auto_aim_attack("shelly", (0, 0), [[70, -12, 94, 12]], [], attack_range=260)
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(window.angles), 1)
 
     def test_playstyle_env_exposes_biomistik_helpers(self):
         play = object.__new__(Play)

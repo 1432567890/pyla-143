@@ -38,14 +38,17 @@ class AutoAimTests(unittest.TestCase):
         self.assertFalse(decision.should_fire)
         self.assertEqual(decision.reason, "los_blocked")
 
-    def test_close_target_can_override_noisy_los_block(self):
+    def test_close_target_uses_clear_bbox_hit_lane_when_center_is_noisy(self):
+        def center_line_blocked(_p1, p2, _walls):
+            return abs(p2[1]) <= 2
+
         decision = choose_auto_aim(
             player_pos=(0, 0),
-            enemy_data=[[55, -10, 75, 10]],
+            enemy_data=[[55, -20, 75, 20]],
             walls=[[20, -25, 35, 25]],
             attack_range=180,
             can_ignore_walls=False,
-            walls_block_line_of_sight=lambda *_args: True,
+            walls_block_line_of_sight=center_line_blocked,
             track_enemy_velocity=lambda *_args: (0.0, 0.0),
             velocity_confidence=0.0,
             projectile_speed=900,
@@ -58,8 +61,30 @@ class AutoAimTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_fire)
-        self.assertIn(decision.reason, {"close_tap", "close_range_override"})
-        self.assertEqual(decision.los_status, "close_override")
+        self.assertIn(decision.reason, {"ok", "close_tap", "close_range_override"})
+        self.assertEqual(decision.los_status, "clear")
+        self.assertNotEqual(decision.target, (65.0, 0.0))
+
+    def test_close_target_does_not_override_real_wall_block(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[55, -10, 75, 10]],
+            walls=[[20, -25, 35, 25]],
+            attack_range=180,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: True,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            close_tap_range=80,
+            dangerous_close_range=120,
+            close_range_override=True,
+        )
+
+        self.assertFalse(decision.should_fire)
+        self.assertTrue(decision.close_threat)
+        self.assertEqual(decision.denied_by, "los_blocked")
 
     def test_close_target_ignores_stale_aim_line_mismatch(self):
         decision = choose_auto_aim(
@@ -252,6 +277,48 @@ class AutoAimTests(unittest.TestCase):
         self.assertTrue(decision.should_fire)
         self.assertEqual(decision.reason, "close_range_override")
         self.assertGreaterEqual(decision.confidence, 0.42)
+
+    def test_attack_window_keeps_borderline_visible_target(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[75, -25, 127, 25]],
+            walls=[],
+            attack_range=100,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+        )
+
+        self.assertTrue(decision.in_range)
+        self.assertTrue(decision.should_fire)
+
+    def test_close_prediction_stays_on_live_bbox_center(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[60, -8, 80, 8]],
+            walls=[],
+            attack_range=220,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (1200.0, 800.0),
+            velocity_confidence=1.0,
+            projectile_speed=500,
+            current_time=1.0,
+            close_tap_range=20,
+            dangerous_close_range=120,
+            close_range_override=True,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.predicted, decision.target)
+        self.assertGreaterEqual(decision.predicted[0], 60)
+        self.assertLessEqual(decision.predicted[0], 80)
+        self.assertGreaterEqual(decision.predicted[1], -8)
+        self.assertLessEqual(decision.predicted[1], 8)
 
 
 if __name__ == "__main__":
