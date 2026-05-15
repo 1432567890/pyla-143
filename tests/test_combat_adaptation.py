@@ -741,6 +741,15 @@ class CombatAdaptationTests(unittest.TestCase):
         play.teammate_follow_min_distance = 180
         play.teammate_follow_step_distance = 8
         play.teammate_follow_force_direct = False
+        play.teammate_follow_wall_avoid_enabled = True
+        play.teammate_follow_detour_angles = [25, 45, 70, 95]
+        play.teammate_follow_direct_probe_multiplier = 1.35
+        play.teammate_follow_detour_hysteresis = 0.25
+        play.teammate_follow_blocked_angle_memory_seconds = 0.8
+        play.teammate_follow_no_safe_escape_enabled = True
+        play._follow_blocked_angles = []
+        play._last_follow_angle = None
+        play._last_follow_wall_debug = {}
         play.get_player_pos = lambda _player: (100, 100)
         play.get_enemy_pos = lambda entity: entity
         play.get_distance = Play.get_distance
@@ -751,10 +760,11 @@ class CombatAdaptationTests(unittest.TestCase):
         movement = play.showdown_follow_teammate(
             [90, 90, 110, 110],
             [(200, 200)],
-            [],
+            [[130, 130, 150, 150]],
         )
 
-        self.assertEqual(movement, 0.0)
+        self.assertNotEqual(round(movement, 1), 45.0)
+        self.assertEqual(play._last_follow_wall_debug["status"], "detour_clear")
 
     def test_showdown_follow_teammate_force_direct_ignores_blocked_unknown_path(self):
         play = object.__new__(Play)
@@ -766,6 +776,15 @@ class CombatAdaptationTests(unittest.TestCase):
         play.teammate_follow_min_distance = 80
         play.teammate_follow_step_distance = 8
         play.teammate_follow_force_direct = True
+        play.teammate_follow_wall_avoid_enabled = True
+        play.teammate_follow_detour_angles = [25, 45, 70, 95]
+        play.teammate_follow_direct_probe_multiplier = 1.35
+        play.teammate_follow_detour_hysteresis = 0.25
+        play.teammate_follow_blocked_angle_memory_seconds = 0.8
+        play.teammate_follow_no_safe_escape_enabled = True
+        play._follow_blocked_angles = []
+        play._last_follow_angle = None
+        play._last_follow_wall_debug = {}
         play.get_player_pos = lambda _player: (100, 100)
         play.get_enemy_pos = lambda entity: entity
         play.get_distance = Play.get_distance
@@ -775,10 +794,73 @@ class CombatAdaptationTests(unittest.TestCase):
         movement = play.showdown_follow_teammate(
             [90, 90, 110, 110],
             [(220, 220)],
-            [],
+            [[130, 130, 150, 150]],
         )
 
-        self.assertEqual(round(movement, 1), 45.0)
+        self.assertNotEqual(round(movement, 1), 45.0)
+        self.assertEqual(round(movement, 1), 225.0)
+        self.assertEqual(play._last_follow_wall_debug["status"], "no_safe_angle")
+
+    def test_wall_aware_follow_keeps_direct_when_clear(self):
+        play = object.__new__(Play)
+        play.teammate_follow_wall_avoid_enabled = True
+        play._last_follow_wall_debug = {}
+        play._follow_blocked_angles = []
+        play.angle_from_direction = Play.angle_from_direction
+        play.is_path_blocked_angle = lambda *_args, **_kwargs: False
+
+        angle, _reason, status = play.choose_wall_aware_follow_angle(
+            (100, 100),
+            (220, 100),
+            [[140, 180, 170, 220]],
+        )
+
+        self.assertEqual(angle, 0.0)
+        self.assertEqual(status, "direct_clear")
+
+    def test_wall_aware_follow_uses_nearest_detour_when_direct_blocked(self):
+        play = object.__new__(Play)
+        play.teammate_follow_wall_avoid_enabled = True
+        play.teammate_follow_detour_angles = [25, 45, 70, 95]
+        play.teammate_follow_direct_probe_multiplier = 1.35
+        play.teammate_follow_detour_hysteresis = 0.25
+        play.teammate_follow_blocked_angle_memory_seconds = 0.8
+        play._follow_blocked_angles = []
+        play._last_follow_angle = None
+        play._last_follow_wall_debug = {}
+        play.angle_from_direction = Play.angle_from_direction
+        play.is_path_blocked_angle = lambda _player, angle, _walls, **_kwargs: round(angle, 1) == 0.0
+
+        angle, _reason, status = play.choose_wall_aware_follow_angle(
+            (100, 100),
+            (220, 100),
+            [[130, 90, 160, 120]],
+        )
+
+        self.assertEqual(round(angle, 1), 25.0)
+        self.assertEqual(status, "detour_clear")
+
+    def test_wall_aware_follow_blocked_memory_prefers_other_side(self):
+        play = object.__new__(Play)
+        play.teammate_follow_wall_avoid_enabled = True
+        play.teammate_follow_detour_angles = [25, 45]
+        play.teammate_follow_direct_probe_multiplier = 1.35
+        play.teammate_follow_detour_hysteresis = 0.25
+        play.teammate_follow_blocked_angle_memory_seconds = 0.8
+        play._follow_blocked_angles = [{"angle": 25.0, "time": time.time(), "reason": "recent_stuck"}]
+        play._last_follow_angle = None
+        play._last_follow_wall_debug = {}
+        play.angle_from_direction = Play.angle_from_direction
+        play.is_path_blocked_angle = lambda _player, angle, _walls, **_kwargs: round(angle, 1) == 0.0
+
+        angle, _reason, status = play.choose_wall_aware_follow_angle(
+            (100, 100),
+            (220, 100),
+            [[130, 90, 160, 120]],
+        )
+
+        self.assertEqual(round(angle, 1), 335.0)
+        self.assertEqual(status, "detour_clear")
 
     def test_showdown_follow_teammate_keeps_locked_mate_over_new_closer_mate(self):
         play = object.__new__(Play)

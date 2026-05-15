@@ -1243,8 +1243,17 @@ class Play(Movement):
         self.teammate_combat_regroup_distance = float(bot_config.get("teammate_combat_regroup_distance", 650))
         self.teammate_combat_bias = float(bot_config.get("teammate_combat_bias", 0.75))
         self.teammate_follow_force_direct = str(bot_config.get("teammate_follow_force_direct", "yes")).lower() in ("yes", "true", "1")
+        self.teammate_follow_wall_avoid_enabled = str(bot_config.get("teammate_follow_wall_avoid_enabled", "true")).lower() in ("yes", "true", "1")
+        self.teammate_follow_detour_angles = bot_config.get("teammate_follow_detour_angles", [25, 45, 70, 95])
+        self.teammate_follow_direct_probe_multiplier = float(bot_config.get("teammate_follow_direct_probe_multiplier", 1.35))
+        self.teammate_follow_detour_hysteresis = float(bot_config.get("teammate_follow_detour_hysteresis", 0.25))
+        self.teammate_follow_blocked_angle_memory_seconds = float(bot_config.get("teammate_follow_blocked_angle_memory_seconds", 0.8))
+        self.teammate_follow_no_safe_escape_enabled = str(bot_config.get("teammate_follow_no_safe_escape_enabled", "true")).lower() in ("yes", "true", "1")
         self.teammate_marker_follow_enabled = str(bot_config.get("teammate_marker_follow_enabled", "yes")).lower() in ("yes", "true", "1")
         self.teammate_marker_edge_margin = float(bot_config.get("teammate_marker_edge_margin", 0.28))
+        self._follow_blocked_angles = []
+        self._last_follow_angle = None
+        self._last_follow_wall_debug = {}
         self.wall_history = []
         self.wall_history_length = int(bot_config.get("wall_history_length", 3))
         self.scene_data = []
@@ -2823,6 +2832,197 @@ class Play(Movement):
             self.locked_teammate_distance = tracked_distance
         return self.locked_teammate, self.locked_teammate_distance
 
+    @staticmethod
+    def angle_distance(a, b):
+        return abs((float(a) - float(b) + 180.0) % 360.0 - 180.0)
+
+    def _follow_detour_offsets(self):
+        raw_offsets = getattr(self, "teammate_follow_detour_angles", [25, 45, 70, 95])
+        if isinstance(raw_offsets, str):
+            raw_offsets = [part.strip() for part in raw_offsets.replace("[", "").replace("]", "").split(",")]
+        offsets = []
+        for value in raw_offsets or []:
+            try:
+                offset = abs(float(value))
+            except (TypeError, ValueError):
+                continue
+            if offset > 0 and all(abs(offset - existing) > 1.0 for existing in offsets):
+                offsets.append(offset)
+        return offsets or [25.0, 45.0, 70.0, 95.0]
+
+    def _probe_follow_angle_blocked(self, player_pos, angle, walls, distance=None):
+        try:
+            return self.is_path_blocked_angle(player_pos, angle, walls, distance=distance)
+        except TypeError:
+            return self.is_path_blocked_angle(player_pos, angle, walls)
+
+    def _stable_follow_walls(self, current_walls):
+        if not getattr(self, "wall_history", None):
+            return []
+        try:
+            stable_walls = self.combine_walls_from_history()
+        except (AttributeError, TypeError, ValueError):
+            return []
+        return stable_walls if stable_walls != (current_walls or []) else []
+
+    def _follow_angle_block_status(self, player_pos, angle, walls, stable_walls, probe_distance):
+        current_blocked = self._probe_follow_angle_blocked(player_pos, angle, walls or [], distance=probe_distance)
+        stable_blocked = bool(stable_walls) and self._probe_follow_angle_blocked(player_pos, angle, stable_walls, distance=probe_distance)
+        blocked = current_blocked or stable_blocked
+        if not blocked:
+            return False, "clear"
+        if current_blocked and stable_blocked:
+            return True, "blocked_current_stable"
+        if current_blocked:
+            return True, "blocked_current"
+        return True, "blocked_stable"
+
+    def _remember_follow_blocked_angle(self, angle, reason, now=None):
+        if angle is None:
+            return
+        now = time.time() if now is None else now
+        ttl = float(getattr(self, "teammate_follow_blocked_angle_memory_seconds", 0.8))
+        memory = [
+            item for item in getattr(self, "_follow_blocked_angles", [])
+            if now - item.get("time", 0.0) <= ttl
+        ]
+        memory.append({"angle": float(angle) % 360.0, "time": now, "reason": reason})
+        self._follow_blocked_angles = memory[-12:]
+
+    def _follow_blocked_angle_penalty(self, angle, now=None):
+        now = time.time() if now is None else now
+        ttl = float(getattr(self, "teammate_follow_blocked_angle_memory_seconds", 0.8))
+        penalty = 0.0
+        kept = []
+        for item in getattr(self, "_follow_blocked_angles", []):
+            age = now - item.get("time", 0.0)
+            if age > ttl:
+                continue
+            kept.append(item)
+            delta = self.angle_distance(angle, item.get("angle", angle))
+            if delta <= 18.0:
+                penalty = max(penalty, (1.0 - age / max(0.1, ttl)) * (1.0 - delta / 18.0) * 55.0)
+        self._follow_blocked_angles = kept
+        return penalty
+
+    def choose_wall_aware_follow_angle(self, player_pos, teammate_pos, walls, current_angle=None):
+        direct_angle = self.angle_from_direction(teammate_pos[0] - player_pos[0], teammate_pos[1] - player_pos[1])
+        if direct_angle is None:
+            return current_angle, "no_direction", "no_safe_angle"
+
+        debug = {
+            "direct_angle": direct_angle,
+            "selected_angle": direct_angle,
+            "status": "direct_clear",
+            "reason": "clear",
+            "rejected_angles": [],
+        }
+        self._last_follow_wall_debug = debug
+
+        if not getattr(self, "teammate_follow_wall_avoid_enabled", True):
+            return direct_angle, "wall_avoid_disabled", "direct_clear"
+
+        stable_walls = self._stable_follow_walls(walls)
+        has_wall_signal = bool(walls) or bool(stable_walls)
+        if not has_wall_signal:
+            return direct_angle, "no_wall_signal", "direct_clear"
+
+        scale = getattr(getattr(self, "window_controller", None), "scale_factor", 1.0)
+        tile_distance = float(getattr(self, "TILE_SIZE", 60)) * float(scale or 1.0)
+        probe_distance = tile_distance * max(0.5, float(getattr(self, "teammate_follow_direct_probe_multiplier", 1.35)))
+        now = time.time()
+
+        direct_blocked, direct_reason = self._follow_angle_block_status(
+            player_pos,
+            direct_angle,
+            walls,
+            stable_walls,
+            probe_distance,
+        )
+        direct_penalty = self._follow_blocked_angle_penalty(direct_angle, now)
+        if not direct_blocked and direct_penalty <= 12.0:
+            debug.update({"status": "direct_clear", "reason": direct_reason, "selected_angle": direct_angle})
+            self._last_follow_angle = direct_angle
+            return direct_angle, direct_reason, "direct_clear"
+
+        if direct_blocked:
+            self._remember_follow_blocked_angle(direct_angle, direct_reason, now)
+        else:
+            direct_reason = "recent_blocked_memory"
+        debug["rejected_angles"].append({"angle": direct_angle, "reason": direct_reason})
+
+        dx = teammate_pos[0] - player_pos[0]
+        dy = teammate_pos[1] - player_pos[1]
+        candidates = []
+        for offset in self._follow_detour_offsets():
+            candidates.append(((direct_angle + offset) % 360.0, "detour"))
+            candidates.append(((direct_angle - offset) % 360.0, "detour"))
+        for vec in ((dx, 0), (0, dy)):
+            if math.hypot(vec[0], vec[1]) >= 1.0:
+                candidates.append((self.angle_from_direction(vec[0], vec[1]), "axis"))
+        candidates.extend((angle, "escape") for angle in ((direct_angle + 135.0) % 360.0, (direct_angle - 135.0) % 360.0, (direct_angle + 180.0) % 360.0))
+
+        deduped = []
+        for angle, kind in candidates:
+            if angle is None:
+                continue
+            if all(self.angle_distance(angle, existing[0]) > 7.0 for existing in deduped):
+                deduped.append((angle, kind))
+
+        best = None
+        for candidate, kind in deduped:
+            blocked, reason = self._follow_angle_block_status(player_pos, candidate, walls, stable_walls, probe_distance)
+            if blocked:
+                self._remember_follow_blocked_angle(candidate, reason, now)
+                debug["rejected_angles"].append({"angle": candidate, "reason": reason})
+                continue
+            if hasattr(self, "angle_points_into_fog") and getattr(self, "current_frame", None) is not None:
+                try:
+                    if self.angle_points_into_fog(self.current_frame, player_pos, candidate):
+                        debug["rejected_angles"].append({"angle": candidate, "reason": "fog"})
+                        continue
+                except (TypeError, ValueError):
+                    pass
+
+            direct_delta = self.angle_distance(candidate, direct_angle)
+            score = 140.0 - direct_delta * 0.85
+            score += max(0.0, math.cos(math.radians(direct_delta))) * 45.0
+            if current_angle is not None:
+                score += max(0.0, 1.0 - self.angle_distance(candidate, current_angle) / 180.0) * 30.0 * float(getattr(self, "teammate_follow_detour_hysteresis", 0.25))
+            elif getattr(self, "_last_follow_angle", None) is not None:
+                score += max(0.0, 1.0 - self.angle_distance(candidate, self._last_follow_angle) / 180.0) * 20.0 * float(getattr(self, "teammate_follow_detour_hysteresis", 0.25))
+            score -= self._follow_blocked_angle_penalty(candidate, now)
+            if kind == "detour":
+                score += 10.0
+            elif kind == "axis":
+                score += 3.0
+            else:
+                score -= 35.0
+
+            item = (score, candidate, kind, reason)
+            if best is None or item[0] > best[0]:
+                best = item
+
+        if best is not None:
+            _score, selected, kind, reason = best
+            status = "detour_clear" if kind == "detour" else "axis_clear" if kind == "axis" else "escape_fallback"
+            debug.update({"status": status, "reason": reason, "selected_angle": selected})
+            self._last_follow_angle = selected
+            return selected, reason, status
+
+        escape_angle = (direct_angle + 180.0) % 360.0
+        if getattr(self, "teammate_follow_no_safe_escape_enabled", True):
+            adjusted, safe, reason = self.find_best_angle_status(player_pos, escape_angle, walls, sweep_range=180, step=15)
+            status = "escape_fallback" if safe else "no_safe_angle"
+            selected = adjusted if safe else escape_angle
+            debug.update({"status": status, "reason": reason, "selected_angle": selected})
+            self._last_follow_angle = selected
+            return selected, reason, status
+
+        debug.update({"status": "no_safe_angle", "reason": "all_candidates_blocked", "selected_angle": escape_angle})
+        self._last_follow_angle = escape_angle
+        return escape_angle, "all_candidates_blocked", "no_safe_angle"
+
     def showdown_follow_teammate(self, player_data, teammate_data, walls):
         """Official Pyla follower behavior adapted to angle movement.
 
@@ -2846,9 +3046,35 @@ class Play(Movement):
         direction_y = closest_teammate[1] - player_pos[1]
         direct_angle = self.angle_from_direction(direction_x, direction_y)
 
+        if getattr(self, "teammate_follow_wall_avoid_enabled", True):
+            angle, reason, status = self.choose_wall_aware_follow_angle(
+                player_pos,
+                closest_teammate,
+                walls,
+                current_angle=getattr(self, "_last_follow_angle", None),
+            )
+            debug_info = getattr(self, "_last_follow_wall_debug", {})
+            vlog(
+                f"follow_wall status={status} direct={direct_angle:.1f} "
+                f"selected={float(angle):.1f} reason={reason} dist={int(closest_distance)}px"
+            )
+            if status == "no_safe_angle" and getattr(self, "combat_snapshot_enabled", False):
+                self.save_combat_snapshot(
+                    "follow_wall_no_safe_angle",
+                    extra={
+                        "follow_wall_status": status,
+                        "follow_wall_direct_angle": direct_angle,
+                        "follow_wall_selected_angle": angle,
+                        "follow_wall_rejected_angles": debug_info.get("rejected_angles", []),
+                    },
+                )
+            return angle
+
         if self.teammate_follow_force_direct and closest_distance > self.teammate_follow_step_distance:
-            vlog(f"follow teammate: force direct -> angle={direct_angle:.1f}° (dist={int(closest_distance)}px)")
-            return direct_angle
+            if not self.is_path_blocked_angle(player_pos, direct_angle, walls):
+                vlog(f"follow teammate: force direct -> angle={direct_angle:.1f}° (dist={int(closest_distance)}px)")
+                return direct_angle
+            vlog(f"follow teammate: force direct blocked -> checking fallbacks angle={direct_angle:.1f}°")
 
         movement_vectors = [(direction_x, direction_y), (direction_x, 0), (0, direction_y)]
         fallback_angle = direct_angle
@@ -3294,6 +3520,10 @@ class Play(Movement):
                 "kill_confirm_score": combat_intent.tactical_plan.kill_confirm_score,
                 "rejected_angles": combat_intent.tactical_plan.rejected_angles,
                 "friendly_excluded_targets": friendly_excluded_targets,
+                "follow_wall_status": getattr(self, "_last_follow_wall_debug", {}).get("status"),
+                "follow_wall_direct_angle": getattr(self, "_last_follow_wall_debug", {}).get("direct_angle"),
+                "follow_wall_selected_angle": getattr(self, "_last_follow_wall_debug", {}).get("selected_angle"),
+                "follow_wall_rejected_angles": getattr(self, "_last_follow_wall_debug", {}).get("rejected_angles", []),
             })
 
         # --- Skills (only when an attackable enemy was found) ---
@@ -3416,6 +3646,10 @@ class Play(Movement):
                 "raw_target_count": len(raw_enemy_data or []),
                 "sanitized_target_count": len(enemy_data or []),
                 "friendly_excluded_targets": friendly_excluded_targets,
+                "follow_wall_status": getattr(self, "_last_follow_wall_debug", {}).get("status"),
+                "follow_wall_direct_angle": getattr(self, "_last_follow_wall_debug", {}).get("direct_angle"),
+                "follow_wall_selected_angle": getattr(self, "_last_follow_wall_debug", {}).get("selected_angle"),
+                "follow_wall_rejected_angles": getattr(self, "_last_follow_wall_debug", {}).get("rejected_angles", []),
             })
 
         if attack_denied_by:
