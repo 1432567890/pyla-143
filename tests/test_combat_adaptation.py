@@ -12,6 +12,7 @@ import numpy as np
 
 sys.modules.setdefault("onnxruntime", types.SimpleNamespace(InferenceSession=None))
 
+from auto_aim import AttackDecision
 from play import Play
 
 
@@ -212,6 +213,89 @@ class CombatAdaptationTests(unittest.TestCase):
 
         self.assertFalse(blocked)
         self.assertIsNone(blocked_window.angle)
+
+    def test_auto_aim_attack_blocks_friendly_overlap_target(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angle = angle
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+
+        fired = play.auto_aim_attack(
+            "shelly",
+            (0, 0),
+            [[100, -20, 140, 20]],
+            [],
+            attack_range=300,
+            excluded_boxes=[[102, -18, 138, 18]],
+        )
+
+        self.assertFalse(fired)
+        self.assertIsNone(window.angle)
+
+    def test_auto_aim_attack_rechecks_precomputed_decision_against_friendly_boxes(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angle = angle
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        decision = AttackDecision(
+            True,
+            aim_angle=0.0,
+            target=(120, 0),
+            predicted=(120, 0),
+            distance=120,
+            attack_range=300,
+            in_range=True,
+            line_of_sight=True,
+            target_bbox=(100, -20, 140, 20),
+        )
+
+        fired = play.auto_aim_attack(
+            "shelly",
+            (0, 0),
+            [[100, -20, 140, 20]],
+            [],
+            attack_range=300,
+            decision=decision,
+            excluded_boxes=[[102, -18, 138, 18]],
+        )
+
+        self.assertFalse(fired)
+        self.assertIsNone(window.angle)
+        self.assertEqual(decision.denied_by, "friendly_excluded")
+
+    def test_sanitize_enemy_targets_removes_teammate_overlap_but_keeps_clear_enemy(self):
+        play = self.make_auto_aim_play(types.SimpleNamespace())
+        sanitized, excluded = play.sanitize_enemy_targets(
+            [[100, -20, 140, 20], [220, -20, 260, 20]],
+            [[102, -18, 138, 18]],
+        )
+
+        self.assertEqual(sanitized, [[220, -20, 260, 20]])
+        self.assertEqual(excluded[0]["bbox"], (100, -20, 140, 20))
+
+    def test_self_exclusion_does_not_block_adjacent_close_enemy(self):
+        play = self.make_auto_aim_play(types.SimpleNamespace())
+        excluded_boxes = play.build_attack_excluded_boxes(
+            player_data=[0, -20, 40, 20],
+            teammate_data=[],
+        )
+        sanitized, excluded = play.sanitize_enemy_targets(
+            [[60, -20, 100, 20]],
+            excluded_boxes,
+        )
+
+        self.assertEqual(sanitized, [[60, -20, 100, 20]])
+        self.assertEqual(excluded, [])
 
     def test_valid_in_range_shot_is_not_delayed_by_defensive_suppression(self):
         class AimWindow:

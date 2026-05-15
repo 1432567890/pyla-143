@@ -210,12 +210,78 @@ def _line_of_sight_clear(player_pos, target_pos, walls, can_ignore_walls, walls_
     return not walls_block_line_of_sight(player_pos, target_pos, walls)
 
 
-def _decision_sort_key(decision, dangerous_close_range):
+def _box_iou(box_a, box_b):
+    if not box_a or not box_b:
+        return 0.0
+    ax1, ay1, ax2, ay2 = [float(value) for value in box_a[:4]]
+    bx1, by1, bx2, by2 = [float(value) for value in box_b[:4]]
+    ax1, ax2 = min(ax1, ax2), max(ax1, ax2)
+    ay1, ay2 = min(ay1, ay2), max(ay1, ay2)
+    bx1, bx2 = min(bx1, bx2), max(bx1, bx2)
+    by1, by2 = min(by1, by2), max(by1, by2)
+    inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
+    inter = inter_w * inter_h
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return 0.0 if union <= 0 else inter / union
+
+
+def _same_bbox_center(a, b, max_center_jump=40.0):
+    if not a or not b:
+        return False
+    return math.hypot(_center(a)[0] - _center(b)[0], _center(a)[1] - _center(b)[1]) <= max_center_jump
+
+
+def _excluded_box_and_kind(excluded):
+    if isinstance(excluded, dict):
+        box = excluded.get("box")
+        if box is None:
+            box = excluded.get("bbox")
+        return box, excluded.get("kind", "friendly")
+    return excluded, "friendly"
+
+
+def _center_exclusion_limit(excluded_box, kind, center_distance_px):
+    limit = float(center_distance_px or 0.0)
+    if kind != "player" or excluded_box is None:
+        return limit
+    width = abs(float(excluded_box[2]) - float(excluded_box[0]))
+    height = abs(float(excluded_box[3]) - float(excluded_box[1]))
+    return min(limit, max(12.0, min(width, height) * 0.25))
+
+
+def _friendly_exclusion_reason(enemy_box, excluded_boxes, iou_threshold, center_distance_px):
+    best_reason = ""
+    best_score = 0.0
+    for excluded in excluded_boxes or []:
+        excluded_box, kind = _excluded_box_and_kind(excluded)
+        if excluded_box is None:
+            continue
+        iou = _box_iou(enemy_box, excluded_box)
+        center_dist = math.hypot(_center(enemy_box)[0] - _center(excluded_box)[0], _center(enemy_box)[1] - _center(excluded_box)[1])
+        if iou >= float(iou_threshold or 0.0):
+            score = iou
+            if score > best_score:
+                best_score = score
+                best_reason = f"{kind}_iou:{iou:.2f}"
+        center_limit = _center_exclusion_limit(excluded_box, kind, center_distance_px)
+        if center_dist <= center_limit:
+            score = 1.0 - center_dist / max(1.0, center_limit)
+            if score > best_score:
+                best_score = score
+                best_reason = f"{kind}_center:{center_dist:.1f}"
+    return best_reason
+
+
+def _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox=None):
     distance = decision.distance if decision.distance is not None else float("inf")
+    preferred_rank = 0 if preferred_target_bbox and _same_bbox_center(decision.target_bbox, preferred_target_bbox) else 1
     if decision.should_fire:
-        return (0, 0 if decision.close_threat else 1, distance, -(decision.confidence or 0.0))
+        return (0, 0 if decision.close_threat else 1, preferred_rank, distance, -(decision.confidence or 0.0))
     diagnostic_close = distance <= dangerous_close_range
-    return (1, 0 if diagnostic_close else 1, distance, -(decision.confidence or 0.0))
+    return (1, 0 if diagnostic_close else 1, preferred_rank, distance, -(decision.confidence or 0.0))
 
 
 def choose_auto_aim(
@@ -236,6 +302,13 @@ def choose_auto_aim(
     close_range_override=True,
     dangerous_close_range=None,
     close_los_override_range=None,
+    preferred_target_bbox=None,
+    excluded_boxes=None,
+    teammate_boxes=None,
+    friendly_iou_threshold=0.18,
+    friendly_center_distance_px=70,
+    close_attack_requires_clear_hit_point=True,
+    attack_wall_guard_enabled=True,
 ):
     if not player_pos:
         return AttackDecision(False, reason="target_invalid", denied_by="target_invalid")
@@ -254,6 +327,8 @@ def choose_auto_aim(
     )
     attack_window = float(attack_range) * 1.035
     best = None
+    excluded_best = None
+    all_excluded_boxes = list(excluded_boxes or []) + list(teammate_boxes or [])
 
     closest_enemy_distance = None
     for enemy in enemy_data:
@@ -261,8 +336,34 @@ def choose_auto_aim(
         center_distance = math.hypot(center[0] - player_pos[0], center[1] - player_pos[1])
         if closest_enemy_distance is None or center_distance < closest_enemy_distance:
             closest_enemy_distance = center_distance
+        excluded_reason = _friendly_exclusion_reason(
+            enemy,
+            all_excluded_boxes,
+            friendly_iou_threshold,
+            friendly_center_distance_px,
+        )
+        if excluded_reason:
+            decision = AttackDecision(
+                False,
+                target=center,
+                distance=center_distance,
+                attack_range=attack_range,
+                in_range=center_distance <= attack_window,
+                line_of_sight=False,
+                reason="friendly_excluded",
+                denied_by="friendly_excluded",
+                threshold=min_confidence,
+                los_status=excluded_reason,
+                target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
+            )
+            if excluded_best is None or center_distance < (excluded_best.distance or float("inf")):
+                excluded_best = decision
+            continue
         closest_box_point = _closest_point_on_box(player_pos, enemy)
         closest_box_distance = math.hypot(closest_box_point[0] - player_pos[0], closest_box_point[1] - player_pos[1])
+        center_los_clear = _line_of_sight_clear(player_pos, center, walls, can_ignore_walls, walls_block_line_of_sight)
         clear_target = _clear_hit_point(
             player_pos,
             enemy,
@@ -297,7 +398,7 @@ def choose_auto_aim(
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
             )
-            if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
+            if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
             continue
 
@@ -321,7 +422,7 @@ def choose_auto_aim(
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
             )
-            if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
+            if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
             continue
 
@@ -384,7 +485,7 @@ def choose_auto_aim(
                 closest_enemy_distance=closest_enemy_distance,
                 aim_fallback_reason=aim_fallback_reason,
             )
-            if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
+            if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
             continue
 
@@ -410,7 +511,7 @@ def choose_auto_aim(
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
             )
-            if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
+            if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
             continue
         if not predicted_los_clear and close_override:
@@ -418,7 +519,38 @@ def choose_auto_aim(
             predicted_distance = distance
             lead_distance = 0.0
             aim_fallback_reason = aim_fallback_reason or "close_los_snap_to_target"
-            predicted_los_clear = True
+            predicted_los_clear = _line_of_sight_clear(
+                player_pos,
+                predicted,
+                walls,
+                can_ignore_walls,
+                walls_block_line_of_sight,
+            )
+            if attack_wall_guard_enabled and close_attack_requires_clear_hit_point and not predicted_los_clear:
+                decision = AttackDecision(
+                    False,
+                    target=target,
+                    predicted=predicted,
+                    distance=predicted_distance,
+                    attack_range=attack_range,
+                    in_range=True,
+                    line_of_sight=False,
+                    velocity=velocity,
+                    reason="los_blocked",
+                    denied_by="wall_blocked_final_hitpoint",
+                    use_tap=use_tap,
+                    threshold=min_confidence,
+                    close_threat=close_override,
+                    close_range_override=close_override,
+                    los_status="blocked",
+                    target_bbox=tuple(enemy),
+                    visible_enemy_count=visible_enemy_count,
+                    closest_enemy_distance=closest_enemy_distance,
+                    aim_fallback_reason=aim_fallback_reason,
+                )
+                if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
+                    best = decision
+                continue
 
         angle = _angle_from_direction(predicted[0] - player_pos[0], predicted[1] - player_pos[1])
         confidence = 1.0
@@ -466,20 +598,28 @@ def choose_auto_aim(
             threshold=min_confidence,
             close_threat=close_override,
             close_range_override=close_override,
-            los_status="clear" if target_los_clear and predicted_los_clear else "predicted_snap",
+            los_status=(
+                "blocked_center_clear_edge"
+                if target_los_clear and predicted_los_clear and not center_los_clear
+                else "clear" if target_los_clear and predicted_los_clear else "predicted_snap"
+            ),
             target_bbox=tuple(enemy),
             visible_enemy_count=visible_enemy_count,
             closest_enemy_distance=closest_enemy_distance,
             aim_fallback_reason=aim_fallback_reason,
         )
 
-        if best is None or _decision_sort_key(decision, dangerous_close_range) < _decision_sort_key(best, dangerous_close_range):
+        if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
             best = decision
 
     if best:
         best.visible_enemy_count = visible_enemy_count
         best.closest_enemy_distance = closest_enemy_distance
         return best
+    if excluded_best:
+        excluded_best.visible_enemy_count = visible_enemy_count
+        excluded_best.closest_enemy_distance = closest_enemy_distance
+        return excluded_best
     return AttackDecision(
         False,
         reason="no_valid_target",

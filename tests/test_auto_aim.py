@@ -4,6 +4,103 @@ from auto_aim import choose_auto_aim
 
 
 class AutoAimTests(unittest.TestCase):
+    def test_preferred_target_lock_biases_aim_without_overriding_close_threat(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[180, -10, 200, 10], [235, -10, 255, 10]],
+            walls=[],
+            attack_range=520,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            preferred_target_bbox=[235, -10, 255, 10],
+            dangerous_close_range=120,
+        )
+
+        self.assertEqual(decision.target_bbox, (235, -10, 255, 10))
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[60, -10, 80, 10], [235, -10, 255, 10]],
+            walls=[],
+            attack_range=520,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            preferred_target_bbox=[235, -10, 255, 10],
+            dangerous_close_range=120,
+        )
+
+        self.assertEqual(decision.target_bbox, (60, -10, 80, 10))
+
+    def test_excludes_friendly_overlap_target(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[100, -20, 140, 20]],
+            walls=[],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            teammate_boxes=[[102, -18, 138, 18]],
+            friendly_iou_threshold=0.18,
+            friendly_center_distance_px=70,
+        )
+
+        self.assertFalse(decision.should_fire)
+        self.assertEqual(decision.denied_by, "friendly_excluded")
+        self.assertEqual(decision.target_bbox, (100, -20, 140, 20))
+
+    def test_nearby_teammate_without_overlap_does_not_block_close_enemy(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[70, -12, 94, 12]],
+            walls=[],
+            attack_range=260,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            teammate_boxes=[[170, -12, 194, 12]],
+            friendly_iou_threshold=0.18,
+            friendly_center_distance_px=70,
+            close_tap_range=80,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.target_bbox, (70, -12, 94, 12))
+
+    def test_preferred_target_lock_cannot_force_shooting_teammate(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[100, -20, 140, 20], [210, -20, 250, 20]],
+            walls=[],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            preferred_target_bbox=[100, -20, 140, 20],
+            teammate_boxes=[[102, -18, 138, 18]],
+            friendly_iou_threshold=0.18,
+            friendly_center_distance_px=70,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.target_bbox, (210, -20, 250, 20))
+
     def test_rejects_target_outside_attack_range(self):
         decision = choose_auto_aim(
             player_pos=(0, 0),
@@ -62,7 +159,7 @@ class AutoAimTests(unittest.TestCase):
 
         self.assertTrue(decision.should_fire)
         self.assertIn(decision.reason, {"ok", "close_tap", "close_range_override"})
-        self.assertEqual(decision.los_status, "clear")
+        self.assertEqual(decision.los_status, "blocked_center_clear_edge")
         self.assertNotEqual(decision.target, (65.0, 0.0))
 
     def test_close_target_does_not_override_real_wall_block(self):

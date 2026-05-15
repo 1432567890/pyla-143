@@ -2,16 +2,24 @@
 # Missing brawlers use the generic values from cfg/bot_config.toml.
 
 [shelly]
+combat_role = "short_range"
 preferred_distance_multiplier = 0.75
+preferred_distance_px = 170
+commit_distance_px = 220
 super_mode = "damage"
 gadget_mode = "defensive"
+finisher_super = true
 panic_shot_range = 170
 low_hp_aggression = "conservative"
 
 [colt]
+combat_role = "long_range"
 preferred_distance_multiplier = 0.95
+preferred_distance_px = 430
+commit_distance_px = 520
 projectile_speed_px_s = 1100
 lead_scale = 1.0
 super_mode = "damage"
 gadget_mode = "engage"
+finisher_super = true
 low_hp_aggression = "conservative"

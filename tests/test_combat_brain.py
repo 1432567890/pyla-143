@@ -9,6 +9,7 @@ from combat_brain import (
     choose_ability_plan,
     choose_attack_gate,
     choose_combat_intent,
+    choose_tactical_plan,
     choose_target,
 )
 
@@ -370,6 +371,135 @@ class CombatBrainTests(unittest.TestCase):
 
         self.assertLessEqual(sum([plan.use_hypercharge, plan.use_super, plan.use_gadget]), 2)
         self.assertEqual(plan.gadget_reason, "combo_limit")
+
+    def test_tactical_plan_chooses_safe_los_angle_over_blocked_retreat(self):
+        target = choose_target(
+            player_pos=(0, 0),
+            enemy_data=[[250, -20, 290, 20]],
+            safe_range=180,
+            attack_range=520,
+            walls=[],
+            can_attack_through_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            dangerous_close_range=120,
+        )
+
+        plan = choose_tactical_plan(
+            frame=CombatFrame(
+                player_pos=(0, 0),
+                enemy_data=[[250, -20, 290, 20]],
+                health=HealthState(ratio=0.90, confidence=1.0),
+                desired_angle=180,
+                safe_range=180,
+                attack_range=520,
+                preferred_distance=220,
+            ),
+            target=target,
+            safety=SafetyResult(angle=180, safe=True, status="clear"),
+            is_angle_blocked=lambda angle: abs(angle - 180) < 1,
+            points_into_fog=lambda _angle: False,
+            line_of_sight_after_move=lambda angle: abs(angle - 180) >= 1,
+        )
+
+        self.assertNotAlmostEqual(plan.selected_angle, 180)
+        self.assertTrue(plan.fire_window)
+        self.assertGreater(plan.survival_score, 0.5)
+
+    def test_tactical_plan_low_hp_blocks_commit_chase(self):
+        target = choose_target(
+            player_pos=(0, 0),
+            enemy_data=[[260, -20, 300, 20]],
+            safe_range=180,
+            attack_range=520,
+            walls=[],
+            can_attack_through_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            dangerous_close_range=120,
+        )
+
+        plan = choose_tactical_plan(
+            frame=CombatFrame(
+                player_pos=(0, 0),
+                enemy_data=[[260, -20, 300, 20]],
+                health=HealthState(ratio=0.20, confidence=1.0, heal_active=True),
+                desired_angle=0,
+                safe_range=180,
+                attack_range=520,
+                preferred_distance=200,
+            ),
+            target=target,
+            safety=SafetyResult(angle=0, safe=True, status="clear"),
+            line_of_sight_after_move=lambda _angle: True,
+        )
+
+        self.assertFalse(plan.commit_allowed)
+        self.assertIn(plan.objective, {"hold_cover", "regroup"})
+
+    def test_tactical_plan_projectile_dodge_angle_beats_attack_angle_when_urgent(self):
+        target = choose_target(
+            player_pos=(0, 0),
+            enemy_data=[[370, -20, 410, 20]],
+            safe_range=180,
+            attack_range=520,
+            walls=[],
+            can_attack_through_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            dangerous_close_range=120,
+        )
+
+        plan = choose_tactical_plan(
+            frame=CombatFrame(
+                player_pos=(0, 0),
+                enemy_data=[[370, -20, 410, 20]],
+                health=HealthState(ratio=0.90, confidence=1.0),
+                desired_angle=0,
+                safe_range=180,
+                attack_range=520,
+                preferred_distance=300,
+                projectile_incoming=True,
+                projectile_dodge_angle=90,
+            ),
+            target=target,
+            safety=SafetyResult(angle=0, safe=True, status="clear"),
+            projectile_danger_for_angle=lambda angle: 0.1 if abs(angle - 90) <= 1 else 1.0,
+            line_of_sight_after_move=lambda _angle: True,
+        )
+
+        self.assertAlmostEqual(plan.selected_angle, 90)
+        self.assertEqual(plan.objective, "survive")
+
+    def test_tactical_plan_teammate_pressure_does_not_override_fog(self):
+        target = choose_target(
+            player_pos=(0, 0),
+            enemy_data=[[250, -20, 290, 20]],
+            safe_range=180,
+            attack_range=520,
+            walls=[],
+            can_attack_through_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            dangerous_close_range=120,
+        )
+
+        plan = choose_tactical_plan(
+            frame=CombatFrame(
+                player_pos=(0, 0),
+                enemy_data=[[250, -20, 290, 20]],
+                health=HealthState(ratio=0.90, confidence=1.0),
+                desired_angle=0,
+                safe_range=180,
+                attack_range=520,
+                teammate_near=True,
+                teammate_angle=0,
+                fog_danger=True,
+            ),
+            target=target,
+            safety=SafetyResult(angle=0, safe=True, status="clear"),
+            points_into_fog=lambda angle: abs(angle) <= 1,
+            line_of_sight_after_move=lambda _angle: True,
+        )
+
+        self.assertEqual(plan.objective, "survive")
+        self.assertNotAlmostEqual(plan.selected_angle, 0)
 
 
 if __name__ == "__main__":
