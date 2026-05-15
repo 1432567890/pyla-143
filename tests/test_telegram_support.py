@@ -61,6 +61,8 @@ class TelegramSupportTests(unittest.TestCase):
         self.assertFalse(settings["business_enabled"])
         self.assertFalse(settings["business_change_name_enabled"])
         self.assertEqual(settings["business_name_template"], "{trophies}")
+        self.assertFalse(settings["business_change_bio_enabled"])
+        self.assertEqual(settings["business_bio_template"], "{trophies}")
 
     def test_business_trophy_format_uses_truncated_decimal_k(self):
         self.assertEqual(format_business_trophies(64834), "64,8k")
@@ -82,13 +84,14 @@ class TelegramSupportTests(unittest.TestCase):
                     "id": "bc-1",
                     "is_enabled": True,
                     "user_chat_id": 456,
-                    "rights": {"can_change_name": True},
+                    "rights": {"can_change_name": True, "can_change_bio": True},
                 })
                 telegram_notifier.remember_chat_id(123)
                 connection = telegram_notifier.load_business_connection()
 
         self.assertEqual(connection["id"], "bc-1")
         self.assertTrue(connection["can_change_name"])
+        self.assertTrue(connection["can_change_bio"])
         self.assertEqual(connection["user_chat_id"], "456")
 
     def test_set_runtime_state_writes_pause_file(self):

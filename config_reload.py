@@ -23,6 +23,8 @@ SAFE_KEYS = {
         "business_enabled",
         "business_name_template",
         "business_change_name_enabled",
+        "business_bio_template",
+        "business_change_bio_enabled",
         "remote_control_enabled",
         "poll_timeout_seconds",
     },

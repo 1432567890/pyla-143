@@ -66,6 +66,8 @@ def load_telegram_settings() -> dict[str, Any]:
     settings.setdefault("business_enabled", False)
     settings.setdefault("business_change_name_enabled", False)
     settings.setdefault("business_name_template", "{trophies}")
+    settings.setdefault("business_change_bio_enabled", False)
+    settings.setdefault("business_bio_template", "{trophies}")
     settings["language"] = normalize_language(settings.get("language") or get_config_language())
     return settings
 
@@ -113,6 +115,8 @@ def remember_business_connection(connection: dict[str, Any]) -> bool:
     }
     if "can_change_name" in rights:
         cleaned["can_change_name"] = bool(rights.get("can_change_name"))
+    if "can_change_bio" in rights:
+        cleaned["can_change_bio"] = bool(rights.get("can_change_bio"))
     if previous == cleaned:
         return False
     chats["business_connection"] = cleaned

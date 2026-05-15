@@ -187,6 +187,7 @@ class TelegramControlServer:
         self._last_heartbeat = 0.0
         self._last_business_name_update = 0.0
         self._last_business_name = ""
+        self._last_business_bio = ""
 
     def start(self) -> bool:
         settings = self.settings_loader()
@@ -423,12 +424,15 @@ class TelegramControlServer:
             f"changed={changed}",
             f"is_enabled={bool(connection.get('is_enabled', True))}",
             f"can_change_name={rights.get('can_change_name', 'unknown')}",
+            f"can_change_bio={rights.get('can_change_bio', 'unknown')}",
         )
 
     async def _maybe_update_business_name(self, token: str, settings: dict[str, Any]) -> None:
         if not _config_bool(settings.get("business_enabled"), False):
             return
-        if not _config_bool(settings.get("business_change_name_enabled"), False):
+        name_enabled = _config_bool(settings.get("business_change_name_enabled"), False)
+        bio_enabled = _config_bool(settings.get("business_change_bio_enabled"), False)
+        if not name_enabled and not bio_enabled:
             return
         if time.time() - self._last_business_name_update < BUSINESS_NAME_UPDATE_INTERVAL_SEC:
             return
@@ -442,26 +446,58 @@ class TelegramControlServer:
         if connection.get("is_enabled") is False:
             print("telegram_business_name_update_skipped reason=business_connection_disabled")
             return
-        if connection.get("can_change_name") is False:
-            print("telegram_business_name_update_skipped reason=missing_can_change_name_right")
-            return
 
         try:
             trophies = await asyncio.to_thread(self._fetch_player_trophies)
-            target_name = format_business_name(
-                settings.get("business_name_template"),
-                format_business_trophies(trophies),
-            )
-            if not target_name:
-                return
-            target_name = target_name[:64]
-            if target_name == self._last_business_name:
-                return
-            if await self._set_business_account_name(token, connection_id, target_name):
-                self._last_business_name = target_name
-                print("telegram_business_name_updated", f"trophies={trophies}", f"name={target_name}")
+            trophies_text = format_business_trophies(trophies)
+            if name_enabled:
+                await self._update_business_name(token, connection, connection_id, settings, trophies, trophies_text)
+            if bio_enabled:
+                await self._update_business_bio(token, connection, connection_id, settings, trophies, trophies_text)
         except Exception as exc:
             print(f"telegram_business_name_update_error {str(exc)[:180]}")
+
+    async def _update_business_name(
+            self,
+            token: str,
+            connection: dict[str, Any],
+            connection_id: str,
+            settings: dict[str, Any],
+            trophies: int,
+            trophies_text: str,
+    ) -> None:
+        if connection.get("can_change_name") is False:
+            print("telegram_business_name_update_skipped reason=missing_can_change_name_right")
+            return
+        target_name = format_business_name(settings.get("business_name_template"), trophies_text)
+        if not target_name:
+            return
+        target_name = target_name[:64]
+        if target_name == self._last_business_name:
+            return
+        if await self._set_business_account_name(token, connection_id, target_name):
+            self._last_business_name = target_name
+            print("telegram_business_name_updated", f"trophies={trophies}", f"name={target_name}")
+
+    async def _update_business_bio(
+            self,
+            token: str,
+            connection: dict[str, Any],
+            connection_id: str,
+            settings: dict[str, Any],
+            trophies: int,
+            trophies_text: str,
+    ) -> None:
+        if connection.get("can_change_bio") is False:
+            print("telegram_business_bio_update_skipped reason=missing_can_change_bio_right")
+            return
+        target_bio = format_business_name(settings.get("business_bio_template"), trophies_text)
+        target_bio = target_bio[:140]
+        if target_bio == self._last_business_bio:
+            return
+        if await self._set_business_account_bio(token, connection_id, target_bio):
+            self._last_business_bio = target_bio
+            print("telegram_business_bio_updated", f"trophies={trophies}", f"bio={target_bio}")
 
     def _fetch_player_trophies(self) -> int:
         api_config = load_brawl_stars_api_config("cfg/brawl_stars_api.toml")
@@ -488,6 +524,23 @@ class TelegramControlServer:
                     return bool(data.get("ok"))
                 body = await response.text()
                 print(f"telegram_business_name_update_failed status={response.status} body={body[:180]}")
+                return False
+
+    async def _set_business_account_bio(self, token: str, connection_id: str, bio: str) -> bool:
+        url = f"https://api.telegram.org/bot{token}/setBusinessAccountBio"
+        payload = {
+            "business_connection_id": connection_id,
+            "bio": bio,
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=15) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if not data.get("ok"):
+                        print(f"telegram_business_bio_update_failed body={str(data)[:180]}")
+                    return bool(data.get("ok"))
+                body = await response.text()
+                print(f"telegram_business_bio_update_failed status={response.status} body={body[:180]}")
                 return False
 
     async def _maybe_send_heartbeat(self, token: str, settings: dict[str, Any]) -> None:
