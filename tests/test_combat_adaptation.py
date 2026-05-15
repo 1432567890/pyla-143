@@ -1,5 +1,8 @@
+import json
 import math
+import os
 import sys
+import tempfile
 import time
 import types
 import unittest
@@ -56,6 +59,28 @@ class CombatAdaptationTests(unittest.TestCase):
     def test_movement_to_vector_converts_legacy_keys(self):
         self.assertEqual(self.movement.movement_to_vector("wd"), (1, -1))
         self.assertEqual(self.movement.movement_to_vector("as"), (-1, 1))
+
+    def test_combat_recorder_saves_death_snapshot(self):
+        play = object.__new__(Play)
+        play.combat_snapshot_enabled = True
+        play.combat_snapshot_seconds = 8
+        play.combat_brain_debug = False
+        play.current_brawler = "shelly"
+        with tempfile.TemporaryDirectory() as directory:
+            play.combat_snapshot_dir = directory
+            play.record_combat_decision({
+                "mode": "retreat_heal",
+                "health_ratio": 0.20,
+                "attack_allowed": False,
+                "attack_denied": "retreat_heal",
+            })
+            path = play.save_combat_snapshot("player_lost", extra={"state": "match"})
+
+            self.assertTrue(os.path.exists(path))
+            with open(path, "r", encoding="utf-8") as handle:
+                snapshot = json.load(handle)
+            self.assertEqual(snapshot["reason"], "player_lost")
+            self.assertEqual(snapshot["recent_decisions"][0]["mode"], "retreat_heal")
 
     def make_auto_aim_play(self, window_controller):
         play = object.__new__(Play)

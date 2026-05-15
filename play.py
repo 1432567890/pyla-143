@@ -4,17 +4,22 @@ import os
 import random
 import threading
 import time
+from collections import deque
 
 import cv2
 import numpy as np
 from state_finder import get_state
 from auto_aim import choose_auto_aim, detect_aim_line_angle
 from combat_brain import (
+    CombatFrame,
     HealthState,
+    SafetyResult,
     TargetScore,
+    TargetMemory,
     build_threat_model as build_combat_threat_model,
     choose_ability_plan,
     choose_attack_gate,
+    choose_combat_intent,
     choose_target as choose_combat_target,
 )
 from detect import Detect
@@ -181,6 +186,8 @@ class Movement:
         self._heal_state = {"active_until": 0.0, "last_health_ratio": None, "reason": ""}
         self._dodge_state = {"angle": None, "mode": "no_dodge", "score": 0.0, "until": 0.0}
         self._projectile_track = {}
+        self._last_projectile_threat = None
+        self._last_projectile_threat_until = 0.0
         self._suppress_attack_until = 0.0
         self._last_aim_attempt_time = 0.0
         self._enemy_track = {}
@@ -218,6 +225,10 @@ class Movement:
         self.defensive_attack_gate_enabled = str(bot_config.get("defensive_attack_gate_enabled", "true")).lower() in ("yes", "true", "1")
         self.panic_shot_range = float(bot_config.get("panic_shot_range", 150))
         self.panic_super_range = float(bot_config.get("panic_super_range", 180))
+        self.target_memory_seconds = float(bot_config.get("target_memory_seconds", 0.75))
+        self.target_switch_margin = float(bot_config.get("target_switch_margin", 0.18))
+        self.projectile_dodge_without_enemy = str(bot_config.get("projectile_dodge_without_enemy", "true")).lower() in ("yes", "true", "1")
+        self.projectile_threat_memory_ms = float(bot_config.get("projectile_threat_memory_ms", 300))
         self.super_min_value_score = float(bot_config.get("super_min_value_score", 0.55))
         self.gadget_min_value_score = float(bot_config.get("gadget_min_value_score", 0.50))
         self.hypercharge_min_value_score = float(bot_config.get("hypercharge_min_value_score", 0.70))
@@ -225,6 +236,11 @@ class Movement:
         self.wall_angle_fail_escape_enabled = str(bot_config.get("wall_angle_fail_escape_enabled", "true")).lower() in ("yes", "true", "1")
         self.wall_escape_blocks_attack = str(bot_config.get("wall_escape_blocks_attack", "true")).lower() in ("yes", "true", "1")
         self._last_ability_plan_log = 0.0
+        self._target_memory = TargetMemory()
+        self.combat_snapshot_enabled = str(bot_config.get("combat_snapshot_enabled", "true")).lower() in ("yes", "true", "1")
+        self.combat_snapshot_dir = str(bot_config.get("combat_snapshot_dir", "debug_frames/combat"))
+        self.combat_snapshot_seconds = float(bot_config.get("combat_snapshot_seconds", 8))
+        self._combat_decision_history = deque(maxlen=max(30, int(self.combat_snapshot_seconds * 30)))
         self.brawler_combat_profiles = load_toml_as_dict("cfg/brawler_combat_profiles.toml")
         
     @staticmethod
@@ -420,6 +436,44 @@ class Movement:
         if getattr(self, "ability_brain_debug", False) or visual_debug:
             print("[ABILITY]", *args)
 
+    def record_combat_decision(self, event):
+        if not getattr(self, "combat_snapshot_enabled", False):
+            return
+        history = getattr(self, "_combat_decision_history", None)
+        if history is None:
+            self._combat_decision_history = deque(maxlen=240)
+            history = self._combat_decision_history
+        payload = dict(event or {})
+        payload["time"] = time.time()
+        history.append(payload)
+
+    def save_combat_snapshot(self, reason, extra=None, brawler=None):
+        if not getattr(self, "combat_snapshot_enabled", False):
+            return None
+        now = time.time()
+        history = list(getattr(self, "_combat_decision_history", []))
+        cutoff = now - float(getattr(self, "combat_snapshot_seconds", 8))
+        recent = [item for item in history if item.get("time", 0.0) >= cutoff]
+        snapshot = {
+            "time": now,
+            "reason": reason,
+            "brawler": brawler or getattr(self, "current_brawler", None),
+            "recent_decisions": recent,
+            "extra": extra or {},
+        }
+        try:
+            directory = getattr(self, "combat_snapshot_dir", "debug_frames/combat")
+            os.makedirs(directory, exist_ok=True)
+            filename = f"combat_{reason}_{int(now * 1000)}.json".replace(os.sep, "_")
+            path = os.path.join(directory, filename)
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(snapshot, handle, ensure_ascii=False, indent=2)
+            self._combatlog(f"snapshot_saved reason={reason} path={path}")
+            return path
+        except Exception as exc:
+            self._combatlog(f"snapshot_failed reason={reason} error={exc}")
+            return None
+
     def get_combat_profile(self, brawler):
         profiles = getattr(self, "brawler_combat_profiles", {}) or {}
         profile = profiles.get(str(brawler or "").strip().lower(), {})
@@ -461,13 +515,32 @@ class Movement:
     def choose_combat_target_score(self, player_pos, enemy_data, walls, brawler, safe_range, attack_range, attack_decision=None):
         if attack_decision and attack_decision.target_bbox:
             return self.target_score_from_attack_decision(attack_decision, player_pos)
+        try:
+            attack_ignores_walls = self.can_attack_through_walls(brawler, "attack", self.brawlers_info)
+        except (KeyError, TypeError):
+            attack_ignores_walls = False
+        memory = getattr(self, "_target_memory", None)
+        if memory is not None and getattr(self, "combat_brain_enabled", False):
+            return memory.choose(
+                now=time.time(),
+                memory_seconds=getattr(self, "target_memory_seconds", 0.75),
+                switch_margin=getattr(self, "target_switch_margin", 0.18),
+                player_pos=player_pos,
+                enemy_data=enemy_data or [],
+                safe_range=safe_range,
+                attack_range=attack_range,
+                walls=walls or [],
+                can_attack_through_walls=attack_ignores_walls,
+                walls_block_line_of_sight=self.walls_block_line_of_sight,
+                dangerous_close_range=self.close_attack_threat_threshold(attack_range),
+            )
         return choose_combat_target(
             player_pos=player_pos,
             enemy_data=enemy_data or [],
             safe_range=safe_range,
             attack_range=attack_range,
             walls=walls or [],
-            can_attack_through_walls=self.can_attack_through_walls(brawler, "attack", self.brawlers_info),
+            can_attack_through_walls=attack_ignores_walls,
             walls_block_line_of_sight=self.walls_block_line_of_sight,
             dangerous_close_range=self.close_attack_threat_threshold(attack_range),
         )
@@ -1932,8 +2005,78 @@ class Play(Movement):
             flicker_active=False,
             projectile_data=None,
     ):
-        if not getattr(self, "enable_combat_mans", True) or not enemy_data:
+        if not getattr(self, "enable_combat_mans", True):
             return base_angle, {"mode": "no_dodge", "threat": 0.0, "reason": "disabled_or_no_enemy"}
+
+        projectile = self.select_incoming_projectile_threat(
+            projectile_data or [],
+            player_pos,
+            current_time,
+        )
+        if not enemy_data:
+            if projectile and getattr(self, "projectile_dodge_without_enemy", True):
+                threat_angle = self.angle_from_direction(
+                    projectile["projectile_velocity"][0],
+                    projectile["projectile_velocity"][1],
+                )
+                candidates = candidate_dodge_angles(base_angle, threat_angle)
+                scored = []
+                rejected = []
+                for candidate in candidates:
+                    score, reasons = score_dodge_angle(
+                        candidate,
+                        base_angle=base_angle,
+                        threat_angle=threat_angle,
+                        closest_enemy_distance=float("inf"),
+                        safe_range=safe_range,
+                        attack_range=attack_range,
+                        is_blocked=lambda angle: self.is_path_blocked_angle(player_pos, angle, walls),
+                        points_into_fog=lambda angle: self.angle_points_into_fog(self.current_frame, player_pos, angle),
+                        current_angle=self._dodge_state.get("angle"),
+                        teammate_angle=None,
+                    )
+                    projectile_score, projectile_reasons = score_projectile_dodge_angle(candidate, projectile)
+                    score += projectile_score + 2.0
+                    reasons.extend(projectile_reasons)
+                    if score < -900:
+                        rejected.append((round(candidate, 1), reasons[0] if reasons else "rejected"))
+                        continue
+                    scored.append((score, candidate, reasons))
+                if scored:
+                    scored.sort(key=lambda item: item[0], reverse=True)
+                    best_score, best_angle, reasons = scored[0]
+                    self._dodge_state = {
+                        "angle": best_angle,
+                        "mode": "projectile_dodge",
+                        "score": best_score,
+                        "until": current_time + self.mans_hysteresis_seconds,
+                    }
+                    self._manslog(
+                        f"dodge_mode=projectile_dodge threat_level={0.72 + projectile['danger'] * 0.24:.2f} "
+                        f"selected_dodge_vector={best_angle:.1f} dodge_score={best_score:.2f} "
+                        f"reason={'+'.join(reasons)} rejected_directions={rejected} enemy_visible=False "
+                        f"projectile_tti={round(projectile['time_to_impact'], 2)}"
+                    )
+                    return best_angle, {
+                        "mode": "projectile_dodge",
+                        "threat": 0.72 + projectile["danger"] * 0.24,
+                        "score": best_score,
+                        "reason": "+".join(reasons),
+                        "rejected": rejected,
+                        "projectile": projectile,
+                    }
+                self._manslog(
+                    f"dodge_mode=projectile_dodge threat_level={0.72 + projectile['danger'] * 0.24:.2f} "
+                    f"enemy_visible=False rejected_directions={rejected} reason=no_safe_candidate"
+                )
+                return base_angle, {
+                    "mode": "projectile_dodge",
+                    "threat": 0.72 + projectile["danger"] * 0.24,
+                    "reason": "no_safe_candidate",
+                    "rejected": rejected,
+                    "projectile": projectile,
+                }
+            return base_angle, {"mode": "no_dodge", "threat": 0.0, "reason": "no_enemy_no_projectile"}
 
         closest_enemy = None
         closest_distance = float("inf")
@@ -1949,11 +2092,6 @@ class Play(Movement):
         threat = threat_level_from_distance(closest_distance, attack_range, safe_range)
         if flicker_active:
             threat = max(threat, 0.50)
-        projectile = self.select_incoming_projectile_threat(
-            projectile_data or [],
-            player_pos,
-            current_time,
-        )
         if projectile:
             threat = max(threat, 0.72 + projectile["danger"] * 0.24)
         if threat < self.mans_threat_threshold and not flicker_active:
@@ -2067,7 +2205,15 @@ class Play(Movement):
         }
 
     def select_incoming_projectile_threat(self, projectile_data, player_pos, current_time):
-        if not getattr(self, "projectile_dodge_enabled", False) or not projectile_data:
+        if not getattr(self, "projectile_dodge_enabled", False):
+            return None
+        if not projectile_data:
+            if current_time < getattr(self, "_last_projectile_threat_until", 0.0):
+                cached = getattr(self, "_last_projectile_threat", None)
+                if cached:
+                    cached = dict(cached)
+                    cached["from_memory"] = True
+                    return cached
             return None
         best = None
         for projectile in projectile_data:
@@ -2087,6 +2233,11 @@ class Play(Movement):
             if best is None or (threat["danger"], -threat["time_to_impact"]) > (best["danger"], -best["time_to_impact"]):
                 best = threat
         if best:
+            self._last_projectile_threat = dict(best)
+            self._last_projectile_threat_until = current_time + max(
+                0.0,
+                float(getattr(self, "projectile_threat_memory_ms", 300)) / 1000.0,
+            )
             self._manslog(
                 "projectile_threat "
                 f"pos={tuple(map(int, best['projectile_pos']))} "
@@ -2094,6 +2245,11 @@ class Play(Movement):
                 f"time_to_impact={best['time_to_impact']:.2f} miss_distance={best['miss_distance']:.1f} "
                 f"danger={best['danger']:.2f}"
             )
+        elif current_time < getattr(self, "_last_projectile_threat_until", 0.0):
+            cached = getattr(self, "_last_projectile_threat", None)
+            if cached:
+                best = dict(cached)
+                best["from_memory"] = True
         return best
 
     def track_projectile_velocity(self, projectile_coords, current_time):
@@ -2779,6 +2935,120 @@ class Play(Movement):
             current_time=time.time(),
         )
 
+        combat_brain_active = bool(getattr(self, "combat_brain_enabled", False))
+        health_state = self.build_health_state(
+            health_ratio,
+            heal_active,
+            flicker_active=flicker_active,
+            flicker_confidence=flicker_confidence,
+        )
+        projectile_threat_active = False
+        if getattr(self, "projectile_dodge_enabled", False):
+            projectile_threat_active = self.select_incoming_projectile_threat(
+                projectile_data or [],
+                player_pos,
+                time.time(),
+            ) is not None
+        safety_result = SafetyResult(angle=angle, safe=True, status="not_checked")
+        if combat_brain_active and getattr(self, "wall_angle_fail_escape_enabled", True):
+            safe_angle, wall_safe, wall_status = self.find_best_angle_status(
+                player_pos,
+                angle,
+                walls,
+            )
+            safety_result = SafetyResult(
+                angle=safe_angle,
+                safe=bool(wall_safe),
+                status=wall_status,
+                reasons=[] if wall_safe else ["no_safe_movement_angle"],
+            )
+            angle = safe_angle
+            if not wall_safe:
+                intent_attack_allowed = False
+                self._combatlog(
+                    f"wall_escape_triggered status={wall_status} angle={angle:.1f} "
+                    f"health={health_ratio} enemy_distance={None if enemy_distance is None else int(enemy_distance)}"
+                )
+                self.save_combat_snapshot(
+                    "wall_no_safe_angle",
+                    extra={
+                        "angle": angle,
+                        "wall_status": wall_status,
+                        "health_ratio": health_ratio,
+                        "enemy_distance": enemy_distance,
+                    },
+                    brawler=brawler,
+                )
+
+        target_score = self.choose_combat_target_score(
+            player_pos,
+            enemy_data,
+            walls,
+            brawler,
+            safe_range,
+            attack_range,
+            attack_decision=None,
+        )
+        closest_teammate, teammate_distance = self.get_closest_teammate(
+            (player_pos[0], player_pos[1], player_pos[0], player_pos[1]),
+            teammate_data,
+        )
+        teammate_near = closest_teammate is not None and teammate_distance <= getattr(self, "teammate_combat_regroup_distance", 650)
+        base_intent_mode = movement_intent.mode if movement_intent is not None else None
+        combat_intent = choose_combat_intent(
+            frame=CombatFrame(
+                player_pos=player_pos,
+                enemy_data=enemy_data or [],
+                teammate_data=teammate_data or [],
+                walls=walls or [],
+                projectiles=projectile_data or [],
+                health=health_state,
+                desired_angle=angle,
+                current_mode=base_intent_mode,
+                safe_range=safe_range,
+                attack_range=attack_range,
+                fog_danger=jump_pad_flee_angle is not None,
+                projectile_incoming=projectile_threat_active,
+                wall_trap=not safety_result.safe,
+                teammate_near=teammate_near,
+                suppress_active=time.time() < getattr(self, "_suppress_attack_until", 0.0),
+            ),
+            target=target_score,
+            safety=safety_result,
+            defensive_gate_enabled=bool(combat_brain_active and getattr(self, "defensive_attack_gate_enabled", True)),
+            panic_shot_range=float(self.get_combat_profile(brawler).get("panic_shot_range", getattr(self, "panic_shot_range", 150))),
+        )
+        angle = combat_intent.movement_angle if combat_intent.movement_angle is not None else angle
+        if combat_brain_active:
+            intent_attack_allowed = bool(intent_attack_allowed and combat_intent.attack_allowed)
+            self._combatlog(
+                f"intent mode={combat_intent.mode} attack_allowed={combat_intent.attack_allowed} "
+                f"attack_denied={combat_intent.attack_denied_reason or 'none'} threat={combat_intent.threat.score:.2f} "
+                f"reasons={','.join(combat_intent.reasons) if combat_intent.reasons else 'none'}"
+            )
+            self.record_combat_decision({
+                "mode": combat_intent.mode,
+                "angle": angle,
+                "health_ratio": health_ratio,
+                "health_source": health_state.source,
+                "threat_score": combat_intent.threat.score,
+                "threat_reasons": combat_intent.threat.reasons,
+                "target": None if target_score is None else {
+                    "bbox": target_score.bbox,
+                    "distance": target_score.distance,
+                    "score": target_score.score,
+                    "line_of_sight": target_score.line_of_sight,
+                    "in_attack_range": target_score.in_attack_range,
+                    "close_threat": target_score.close_threat,
+                    "stale": target_score.stale,
+                },
+                "attack_allowed": combat_intent.attack_allowed,
+                "attack_denied": combat_intent.attack_denied_reason,
+                "safety_status": safety_result.status,
+                "projectile_incoming": projectile_threat_active,
+                "fog_danger": jump_pad_flee_angle is not None,
+            })
+
         # --- Skills (only when an attackable enemy was found) ---
         if enemy_coords is None:
             return angle
@@ -2805,7 +3075,7 @@ class Play(Movement):
                 f"range={attack_range}px)"
             )
 
-        intent_mode = movement_intent.mode if movement_intent is not None else None
+        intent_mode = combat_intent.mode if combat_brain_active else (movement_intent.mode if movement_intent is not None else None)
         if intent_mode is None:
             if heal_active:
                 intent_mode = "retreat_heal"
@@ -2813,13 +3083,7 @@ class Play(Movement):
                 intent_mode = "escape_fog"
             else:
                 intent_mode = "strafe_attack_lane" if attack_decision.should_fire else "approach"
-        health_state = self.build_health_state(
-            health_ratio,
-            heal_active,
-            flicker_active=flicker_active,
-            flicker_confidence=flicker_confidence,
-        )
-        target_score = self.choose_combat_target_score(
+        attack_target_score = self.choose_combat_target_score(
             player_pos,
             enemy_data,
             walls,
@@ -2828,8 +3092,9 @@ class Play(Movement):
             attack_range,
             attack_decision=attack_decision,
         )
+        if attack_target_score is not None:
+            target_score = attack_target_score
         ability_plan = None
-        combat_brain_active = bool(getattr(self, "combat_brain_enabled", False))
         ability_brain_active = bool(combat_brain_active and getattr(self, "ability_brain_enabled", False))
         if ability_brain_active:
             ability_plan = self.choose_combat_ability_plan(
@@ -2845,8 +3110,9 @@ class Play(Movement):
                 health_state,
                 intent_mode,
                 fog_flee_angle=jump_pad_flee_angle,
-                projectile_incoming=intent_mode == "dodge_projectile",
+                projectile_incoming=projectile_threat_active or intent_mode == "dodge_projectile",
             )
+            combat_intent.ability_plan = ability_plan
         else:
             self.try_use_super_on_enemy(brawler, brawler_info, player_pos, enemy_coords, enemy_distance, walls)
 
@@ -2867,6 +3133,9 @@ class Play(Movement):
                 panic_shot_range=float(self.get_combat_profile(brawler).get("panic_shot_range", getattr(self, "panic_shot_range", 150))),
                 suppress_active=suppress_active,
             )
+            if combat_brain_active and combat_intent.attack_denied_reason and not combat_intent.attack_allowed:
+                allowed = False
+                gate_reason = combat_intent.attack_denied_reason
             if not allowed:
                 attack_denied_by = gate_reason or "movement_intent_blocks_attack"
             elif gate_reason == "panic_shot" and getattr(self, "attack_decision_debug", False):
@@ -4041,6 +4310,14 @@ class Play(Movement):
                     {"raw_detection": raw_data},
                     brawler,
                     {"state": getattr(main, "state", None)},
+                )
+                self.save_combat_snapshot(
+                    "player_lost",
+                    extra={
+                        "raw_detection_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else None,
+                        "state": getattr(main, "state", None),
+                    },
+                    brawler=brawler,
                 )
                 self.window_controller.keys_up(list("wasd"))
             self.time_since_different_movement = time.time()

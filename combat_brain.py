@@ -96,14 +96,107 @@ class AbilityPlan:
 
 @dataclass
 class CombatIntent:
-    mode: str
-    movement_angle: float | None
-    target: TargetScore | None
-    threat: ThreatModel
-    ability_plan: AbilityPlan
-    attack_allowed: bool
+    mode: str = "roam"
+    movement_angle: float | None = None
+    target: TargetScore | None = None
+    threat: ThreatModel = field(default_factory=ThreatModel)
+    ability_plan: AbilityPlan = field(default_factory=AbilityPlan)
+    attack_allowed: bool = False
     attack_denied_reason: str = ""
     reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SafetyResult:
+    angle: float | None = None
+    safe: bool = True
+    status: str = "not_checked"
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CombatFrame:
+    player_pos: tuple | None = None
+    enemy_data: list = field(default_factory=list)
+    teammate_data: list = field(default_factory=list)
+    walls: list = field(default_factory=list)
+    projectiles: list = field(default_factory=list)
+    health: HealthState = field(default_factory=HealthState)
+    desired_angle: float | None = None
+    current_mode: str | None = None
+    safe_range: float = 0.0
+    attack_range: float = 0.0
+    fog_danger: bool = False
+    projectile_incoming: bool = False
+    wall_trap: bool = False
+    teammate_near: bool = False
+    suppress_active: bool = False
+
+
+class TargetMemory:
+    """Small target lock with stale memory for smoother aim decisions."""
+
+    def __init__(self):
+        self.locked_target: TargetScore | None = None
+        self.locked_until = 0.0
+
+    @staticmethod
+    def _same_target(a, b, max_center_jump=135.0):
+        if not a or not b or a.center is None or b.center is None:
+            return False
+        return distance(a.center, b.center) <= float(max_center_jump)
+
+    def reset(self):
+        self.locked_target = None
+        self.locked_until = 0.0
+
+    def choose(
+            self,
+            *,
+            now,
+            memory_seconds=0.75,
+            switch_margin=0.18,
+            **score_kwargs):
+        scores = score_targets(**score_kwargs)
+        if not scores:
+            if self.locked_target and now <= self.locked_until:
+                old = self.locked_target
+                return TargetScore(
+                    bbox=old.bbox,
+                    center=old.center,
+                    distance=old.distance,
+                    score=clamp(old.score * 0.35),
+                    line_of_sight=False,
+                    in_attack_range=False,
+                    close_threat=False,
+                    stale=True,
+                    reasons=[*old.reasons, "stale_memory"],
+                )
+            self.reset()
+            return None
+
+        best = scores[0]
+        locked_current = None
+        if self.locked_target is not None:
+            closest_locked_distance = float("inf")
+            for candidate in scores:
+                if self._same_target(self.locked_target, candidate):
+                    locked_distance = distance(self.locked_target.center, candidate.center)
+                    if locked_distance >= closest_locked_distance:
+                        continue
+                    closest_locked_distance = locked_distance
+                    locked_current = candidate
+
+        chosen = best
+        if locked_current is not None and best is not locked_current:
+            close_override = bool(best.close_threat and not locked_current.close_threat)
+            meaningful_upgrade = best.score >= locked_current.score + float(switch_margin or 0.0)
+            if not close_override and not meaningful_upgrade:
+                chosen = locked_current
+
+        self.locked_target = chosen
+        self.locked_until = now + max(0.0, float(memory_seconds or 0.0))
+        return chosen
 
 
 def score_targets(
@@ -163,6 +256,81 @@ def score_targets(
 def choose_target(**kwargs):
     scores = score_targets(**kwargs)
     return scores[0] if scores else None
+
+
+def choose_combat_intent(
+    *,
+    frame,
+    target=None,
+    safety=None,
+    ability_plan=None,
+    defensive_gate_enabled=True,
+    panic_shot_range=150.0,
+):
+    safety = safety or SafetyResult(angle=frame.desired_angle, safe=True, status="not_checked")
+    target = target if target is not None else None
+    enemy_count_in_range = 0
+    if frame.player_pos is not None:
+        for enemy in frame.enemy_data or []:
+            try:
+                if distance(frame.player_pos, box_center(enemy)) <= float(frame.attack_range or 0.0):
+                    enemy_count_in_range += 1
+            except (TypeError, IndexError):
+                continue
+    threat = build_threat_model(
+        target=target,
+        enemy_count_in_range=enemy_count_in_range,
+        health=frame.health,
+        fog_danger=frame.fog_danger,
+        projectile_incoming=frame.projectile_incoming,
+        wall_trap=frame.wall_trap or not safety.safe,
+        teammate_near=frame.teammate_near,
+        safe_range=frame.safe_range,
+    )
+
+    mode = frame.current_mode or threat.mode
+    if frame.fog_danger:
+        mode = "escape_fog"
+    elif frame.wall_trap or not safety.safe:
+        mode = "wall_escape"
+    elif frame.projectile_incoming:
+        mode = "dodge_projectile"
+    elif frame.health.low and mode not in {"escape_fog", "wall_escape", "dodge_projectile"}:
+        mode = "retreat_heal"
+    elif target and target.close_threat and not frame.health.low:
+        mode = "kite_close_enemy"
+    elif target and target.in_attack_range and target.line_of_sight:
+        mode = "strafe_attack_lane"
+
+    threat.mode = mode
+    attack_allowed, denied_reason = choose_attack_gate(
+        mode=mode,
+        target=target,
+        health=frame.health,
+        defensive_gate_enabled=defensive_gate_enabled,
+        panic_shot_range=panic_shot_range,
+        suppress_active=frame.suppress_active,
+    )
+    if target and target.stale:
+        attack_allowed = False
+        denied_reason = "stale_target"
+
+    reasons = list(threat.reasons)
+    if safety.status != "not_checked":
+        reasons.append(f"safety:{safety.status}")
+    if frame.projectile_incoming and not frame.enemy_data:
+        reasons.append("projectile_without_enemy")
+
+    return CombatIntent(
+        mode=mode,
+        movement_angle=safety.angle if safety.angle is not None else frame.desired_angle,
+        target=target,
+        threat=threat,
+        ability_plan=ability_plan or AbilityPlan(),
+        attack_allowed=attack_allowed,
+        attack_denied_reason=denied_reason,
+        reasons=reasons,
+    )
 
 
 def build_threat_model(
@@ -436,5 +604,10 @@ def choose_ability_plan(
         else:
             plan.hypercharge_reason = "low_value"
             denies.append("hypercharge:low_value")
+
+    if plan.use_hypercharge and plan.use_super and plan.use_gadget:
+        plan.use_gadget = False
+        plan.gadget_reason = "combo_limit"
+        denies.append("gadget:combo_limit")
 
     return plan

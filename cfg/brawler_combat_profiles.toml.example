@@ -1,4 +1,4 @@
-# Optional per-brawler combat overrides for Combat Brain 2.0.
+# Optional per-brawler combat overrides for Combat Brain 3.0.
 # Missing brawlers use the generic values from cfg/bot_config.toml.
 
 [shelly]
@@ -6,9 +6,12 @@ preferred_distance_multiplier = 0.75
 super_mode = "damage"
 gadget_mode = "defensive"
 panic_shot_range = 170
+low_hp_aggression = "conservative"
 
 [colt]
 preferred_distance_multiplier = 0.95
 projectile_speed_px_s = 1100
 lead_scale = 1.0
 super_mode = "damage"
+gadget_mode = "engage"
+low_hp_aggression = "conservative"
