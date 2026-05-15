@@ -63,6 +63,9 @@ def load_telegram_settings() -> dict[str, Any]:
     settings.setdefault("notify_on_config_reload", True)
     settings.setdefault("notify_on_trophy_update", True)
     settings.setdefault("notification_buttons_mode", "minimal")
+    settings.setdefault("business_enabled", False)
+    settings.setdefault("business_change_name_enabled", False)
+    settings.setdefault("business_name_template", "{trophies}")
     settings["language"] = normalize_language(settings.get("language") or get_config_language())
     return settings
 
@@ -78,11 +81,42 @@ def remember_chat_id(chat_id: int | str | None) -> bool:
     chat_id_text = _clean_chat_id(chat_id)
     if not chat_id_text:
         return False
-    chat_ids = load_known_chat_ids()
+    chats = load_toml_as_dict(TELEGRAM_CHATS_PATH) if Path(TELEGRAM_CHATS_PATH).exists() else {}
+    chat_ids = _as_chat_ids(chats.get("chat_ids"))
     if chat_id_text in chat_ids:
         return False
     chat_ids.append(chat_id_text)
-    save_dict_as_toml({"chat_ids": chat_ids}, TELEGRAM_CHATS_PATH)
+    chats["chat_ids"] = chat_ids
+    save_dict_as_toml(chats, TELEGRAM_CHATS_PATH)
+    return True
+
+
+def load_business_connection() -> dict[str, Any]:
+    if not Path(TELEGRAM_CHATS_PATH).exists():
+        return {}
+    chats = load_toml_as_dict(TELEGRAM_CHATS_PATH)
+    connection = chats.get("business_connection")
+    return connection if isinstance(connection, dict) else {}
+
+
+def remember_business_connection(connection: dict[str, Any]) -> bool:
+    connection_id = str(connection.get("id") or "").strip()
+    if not connection_id:
+        return False
+    chats = load_toml_as_dict(TELEGRAM_CHATS_PATH) if Path(TELEGRAM_CHATS_PATH).exists() else {}
+    previous = chats.get("business_connection") if isinstance(chats.get("business_connection"), dict) else {}
+    rights = connection.get("rights") or {}
+    cleaned = {
+        "id": connection_id,
+        "is_enabled": bool(connection.get("is_enabled", True)),
+        "user_chat_id": str(connection.get("user_chat_id") or ""),
+    }
+    if "can_change_name" in rights:
+        cleaned["can_change_name"] = bool(rights.get("can_change_name"))
+    if previous == cleaned:
+        return False
+    chats["business_connection"] = cleaned
+    save_dict_as_toml(chats, TELEGRAM_CHATS_PATH)
     return True
 
 

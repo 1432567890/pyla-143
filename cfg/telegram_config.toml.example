@@ -19,3 +19,6 @@ notify_on_error = true
 notify_on_brawler_change = true
 notify_on_config_reload = true
 notify_on_trophy_update = true
+business_enabled = false
+business_name_template = "{trophies}"
+business_change_name_enabled = false

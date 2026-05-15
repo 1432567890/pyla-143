@@ -21,11 +21,23 @@ from telegram_notifier import (
     async_edit_message,
     async_send_message,
     async_send_photo,
+    load_business_connection,
     load_telegram_settings,
     main_keyboard,
+    remember_business_connection,
     remember_chat_id,
 )
-from utils import _config_bool, get_brawler_list, load_saved_brawler_data, save_brawler_data
+from utils import (
+    _config_bool,
+    fetch_brawl_stars_player,
+    get_brawler_list,
+    load_brawl_stars_api_config,
+    load_saved_brawler_data,
+    save_brawler_data,
+)
+
+BUSINESS_TROPHIES_PLACEHOLDER = "{trophies}"
+BUSINESS_NAME_UPDATE_INTERVAL_SEC = 60
 
 
 def set_runtime_state(state_path: str | Path, paused: bool) -> str:
@@ -44,6 +56,30 @@ def is_admin(settings: dict[str, Any], user_id: int | str | None) -> bool:
 def _short(value: Any, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
     return html.escape(text if text else fallback)
+
+
+def format_business_trophies(trophies: int | str | float | None) -> str:
+    try:
+        value = max(0, int(trophies or 0))
+    except (TypeError, ValueError):
+        value = 0
+    if value < 1000:
+        return str(value)
+    truncated_tenths = value // 100
+    whole = truncated_tenths // 10
+    decimal = truncated_tenths % 10
+    if decimal == 0:
+        return f"{whole}k"
+    return f"{whole},{decimal}k"
+
+
+def format_business_name(template: str | None, trophies_text: str) -> str:
+    name_template = str(template or "").strip()
+    if not name_template:
+        return trophies_text
+    if BUSINESS_TROPHIES_PLACEHOLDER in name_template:
+        return name_template.replace(BUSINESS_TROPHIES_PLACEHOLDER, trophies_text).strip()
+    return f"{name_template} {trophies_text}".strip()
 
 
 def _status_from_details(state_path: str | Path, details: dict[str, Any], stats: dict[str, Any]) -> str:
@@ -149,19 +185,24 @@ class TelegramControlServer:
         self._offset = 0
         self._heartbeat_enabled = True
         self._last_heartbeat = 0.0
+        self._last_business_name_update = 0.0
+        self._last_business_name = ""
 
     def start(self) -> bool:
         settings = self.settings_loader()
         self._heartbeat_enabled = _config_bool(settings.get("heartbeat_enabled"), True)
+        business_enabled = _config_bool(settings.get("business_enabled"), False)
+        remote_control_enabled = _config_bool(settings.get("remote_control_enabled"), True)
         print(
             "telegram_start_requested",
             f"telegram_enabled={_config_bool(settings.get('enabled'), False)}",
             f"telegram_token_present={bool(str(settings.get('bot_token') or '').strip())}",
             f"telegram_admin_ids_count={len(settings.get('admin_ids') or [])}",
+            f"telegram_business_enabled={business_enabled}",
         )
         if not _config_bool(settings.get("enabled"), False):
             return False
-        if not _config_bool(settings.get("remote_control_enabled"), True):
+        if not remote_control_enabled and not business_enabled:
             return False
         token = str(settings.get("bot_token") or "").strip()
         if not token:
@@ -207,6 +248,7 @@ class TelegramControlServer:
             timeout_seconds = max(5, int(settings.get("poll_timeout_seconds", 25) or 25))
             try:
                 await self._maybe_send_heartbeat(token, settings)
+                await self._maybe_update_business_name(token, settings)
                 updates = await self._get_updates(token, timeout_seconds)
                 for update in updates:
                     self._offset = max(self._offset, int(update.get("update_id", 0)) + 1)
@@ -236,7 +278,7 @@ class TelegramControlServer:
         params = {
             "timeout": timeout_seconds,
             "offset": self._offset,
-            "allowed_updates": json.dumps(["message", "callback_query", "inline_query"]),
+            "allowed_updates": json.dumps(["message", "callback_query", "inline_query", "business_connection"]),
         }
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params, timeout=timeout_seconds + 10) as response:
@@ -246,6 +288,9 @@ class TelegramControlServer:
         return list(data.get("result") or [])
 
     async def _handle_update(self, token: str, update: dict[str, Any]) -> None:
+        if update.get("business_connection"):
+            self._handle_business_connection(update["business_connection"])
+            return
         if update.get("callback_query"):
             await self._handle_callback(token, update["callback_query"])
             return
@@ -261,6 +306,8 @@ class TelegramControlServer:
             return
 
         settings = self.settings_loader()
+        if not _config_bool(settings.get("remote_control_enabled"), True):
+            return
         command = text.split()[0].split("@", 1)[0].lower()
         print(f"telegram_command_received command={command} chat_id={chat_id}")
         remember_chat_id(chat_id)
@@ -296,6 +343,8 @@ class TelegramControlServer:
 
     async def _handle_callback(self, token: str, callback: dict[str, Any]) -> None:
         settings = self.settings_loader()
+        if not _config_bool(settings.get("remote_control_enabled"), True):
+            return
         user = callback.get("from") or {}
         message = callback.get("message") or {}
         chat = message.get("chat") or {}
@@ -331,6 +380,9 @@ class TelegramControlServer:
 
     async def _handle_inline_query(self, token: str, inline_query: dict[str, Any]) -> None:
         settings = self.settings_loader()
+        if not _config_bool(settings.get("remote_control_enabled"), True):
+            await async_answer_inline_query(str(inline_query.get("id")), [], token=token)
+            return
         if not is_admin(settings, (inline_query.get("from") or {}).get("id")):
             await async_answer_inline_query(str(inline_query.get("id")), [], token=token)
             return
@@ -359,6 +411,84 @@ class TelegramControlServer:
                 },
             })
         await async_answer_inline_query(str(inline_query.get("id")), results, token=token)
+
+    def _handle_business_connection(self, connection: dict[str, Any]) -> None:
+        settings = self.settings_loader()
+        if not _config_bool(settings.get("business_enabled"), False):
+            return
+        changed = remember_business_connection(connection)
+        rights = connection.get("rights") or {}
+        print(
+            "telegram_business_connection_received",
+            f"changed={changed}",
+            f"is_enabled={bool(connection.get('is_enabled', True))}",
+            f"can_change_name={rights.get('can_change_name', 'unknown')}",
+        )
+
+    async def _maybe_update_business_name(self, token: str, settings: dict[str, Any]) -> None:
+        if not _config_bool(settings.get("business_enabled"), False):
+            return
+        if not _config_bool(settings.get("business_change_name_enabled"), False):
+            return
+        if time.time() - self._last_business_name_update < BUSINESS_NAME_UPDATE_INTERVAL_SEC:
+            return
+        self._last_business_name_update = time.time()
+
+        connection = load_business_connection()
+        connection_id = str(connection.get("id") or "").strip()
+        if not connection_id:
+            print("telegram_business_name_update_skipped reason=missing_business_connection")
+            return
+        if connection.get("is_enabled") is False:
+            print("telegram_business_name_update_skipped reason=business_connection_disabled")
+            return
+        if connection.get("can_change_name") is False:
+            print("telegram_business_name_update_skipped reason=missing_can_change_name_right")
+            return
+
+        try:
+            trophies = await asyncio.to_thread(self._fetch_player_trophies)
+            target_name = format_business_name(
+                settings.get("business_name_template"),
+                format_business_trophies(trophies),
+            )
+            if not target_name:
+                return
+            target_name = target_name[:64]
+            if target_name == self._last_business_name:
+                return
+            if await self._set_business_account_name(token, connection_id, target_name):
+                self._last_business_name = target_name
+                print("telegram_business_name_updated", f"trophies={trophies}", f"name={target_name}")
+        except Exception as exc:
+            print(f"telegram_business_name_update_error {str(exc)[:180]}")
+
+    def _fetch_player_trophies(self) -> int:
+        api_config = load_brawl_stars_api_config("cfg/brawl_stars_api.toml")
+        timeout = int(api_config.get("timeout_seconds") or api_config.get("timeout_sec") or 15)
+        player_data = fetch_brawl_stars_player(
+            api_config.get("api_token", "").strip(),
+            api_config.get("player_tag", "").strip(),
+            timeout,
+        )
+        return int(player_data.get("trophies", 0) or 0)
+
+    async def _set_business_account_name(self, token: str, connection_id: str, first_name: str) -> bool:
+        url = f"https://api.telegram.org/bot{token}/setBusinessAccountName"
+        payload = {
+            "business_connection_id": connection_id,
+            "first_name": first_name,
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=15) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if not data.get("ok"):
+                        print(f"telegram_business_name_update_failed body={str(data)[:180]}")
+                    return bool(data.get("ok"))
+                body = await response.text()
+                print(f"telegram_business_name_update_failed status={response.status} body={body[:180]}")
+                return False
 
     async def _maybe_send_heartbeat(self, token: str, settings: dict[str, Any]) -> None:
         if not self._heartbeat_enabled or not _config_bool(settings.get("heartbeat_enabled"), True):

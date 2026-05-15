@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import telegram_notifier
 from runtime_control import PAUSED, RUNNING, read_state
-from telegram_control import set_runtime_state
+from telegram_control import format_business_name, format_business_trophies, set_runtime_state
 
 
 class TelegramSupportTests(unittest.TestCase):
@@ -58,6 +58,38 @@ class TelegramSupportTests(unittest.TestCase):
         self.assertTrue(settings["send_match_summary"])
         self.assertTrue(settings["include_screenshot"])
         self.assertTrue(settings["remote_control_enabled"])
+        self.assertFalse(settings["business_enabled"])
+        self.assertFalse(settings["business_change_name_enabled"])
+        self.assertEqual(settings["business_name_template"], "{trophies}")
+
+    def test_business_trophy_format_uses_truncated_decimal_k(self):
+        self.assertEqual(format_business_trophies(64834), "64,8k")
+        self.assertEqual(format_business_trophies(843493), "843,4k")
+        self.assertEqual(format_business_trophies(1284), "1,2k")
+        self.assertEqual(format_business_trophies(1000), "1k")
+        self.assertEqual(format_business_trophies(999), "999")
+
+    def test_business_name_template_appends_when_placeholder_missing(self):
+        self.assertEqual(format_business_name("segment ✦ {trophies}", "1,2k"), "segment ✦ 1,2k")
+        self.assertEqual(format_business_name("segment ✦", "1,2k"), "segment ✦ 1,2k")
+        self.assertEqual(format_business_name("", "1,2k"), "1,2k")
+
+    def test_business_connection_survives_chat_id_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chat_path = Path(tmp) / "telegram_chats.toml"
+            with patch.object(telegram_notifier, "TELEGRAM_CHATS_PATH", str(chat_path)):
+                telegram_notifier.remember_business_connection({
+                    "id": "bc-1",
+                    "is_enabled": True,
+                    "user_chat_id": 456,
+                    "rights": {"can_change_name": True},
+                })
+                telegram_notifier.remember_chat_id(123)
+                connection = telegram_notifier.load_business_connection()
+
+        self.assertEqual(connection["id"], "bc-1")
+        self.assertTrue(connection["can_change_name"])
+        self.assertEqual(connection["user_chat_id"], "456")
 
     def test_set_runtime_state_writes_pause_file(self):
         with tempfile.TemporaryDirectory() as tmp:
