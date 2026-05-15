@@ -9,6 +9,14 @@ import cv2
 import numpy as np
 from state_finder import get_state
 from auto_aim import choose_auto_aim, detect_aim_line_angle
+from combat_brain import (
+    HealthState,
+    TargetScore,
+    build_threat_model as build_combat_threat_model,
+    choose_ability_plan,
+    choose_attack_gate,
+    choose_target as choose_combat_target,
+)
 from detect import Detect
 from movement_intent import (
     MovementIntentMemory,
@@ -203,6 +211,21 @@ class Movement:
         self.movement_intent_angle_smoothing = float(bot_config.get("movement_intent_angle_smoothing", 0.35))
         self.movement_intent_debug = str(bot_config.get("movement_intent_debug", "yes")).lower() in ("yes", "true", "1")
         self._movement_intent_memory = MovementIntentMemory()
+        self.combat_brain_enabled = str(bot_config.get("combat_brain_enabled", "true")).lower() in ("yes", "true", "1")
+        self.combat_brain_debug = str(bot_config.get("combat_brain_debug", "yes")).lower() in ("yes", "true", "1")
+        self.ability_brain_enabled = str(bot_config.get("ability_brain_enabled", "true")).lower() in ("yes", "true", "1")
+        self.ability_brain_debug = str(bot_config.get("ability_brain_debug", "yes")).lower() in ("yes", "true", "1")
+        self.defensive_attack_gate_enabled = str(bot_config.get("defensive_attack_gate_enabled", "true")).lower() in ("yes", "true", "1")
+        self.panic_shot_range = float(bot_config.get("panic_shot_range", 150))
+        self.panic_super_range = float(bot_config.get("panic_super_range", 180))
+        self.super_min_value_score = float(bot_config.get("super_min_value_score", 0.55))
+        self.gadget_min_value_score = float(bot_config.get("gadget_min_value_score", 0.50))
+        self.hypercharge_min_value_score = float(bot_config.get("hypercharge_min_value_score", 0.70))
+        self.ability_retry_log_interval_ms = float(bot_config.get("ability_retry_log_interval_ms", 500))
+        self.wall_angle_fail_escape_enabled = str(bot_config.get("wall_angle_fail_escape_enabled", "true")).lower() in ("yes", "true", "1")
+        self.wall_escape_blocks_attack = str(bot_config.get("wall_escape_blocks_attack", "true")).lower() in ("yes", "true", "1")
+        self._last_ability_plan_log = 0.0
+        self.brawler_combat_profiles = load_toml_as_dict("cfg/brawler_combat_profiles.toml")
         
     @staticmethod
     def get_enemy_pos(enemy):
@@ -299,6 +322,7 @@ class Movement:
         close_los_override_range = getattr(self, "auto_aim_close_los_override_range", 0)
         close_los_override_range = close_los_override_range if close_los_override_range > 0 else None
         lead_shots_enabled = getattr(self, "lead_shots_enabled", True)
+        profile = self.get_combat_profile(brawler)
         return choose_auto_aim(
             player_pos=player_pos,
             enemy_data=enemy_data,
@@ -308,11 +332,11 @@ class Movement:
             walls_block_line_of_sight=self.walls_block_line_of_sight,
             track_enemy_velocity=self.track_enemy_velocity if lead_shots_enabled else (lambda *_args: (0.0, 0.0)),
             velocity_confidence=(lambda: getattr(self, "enemy_velocity_confidence", 0.0)) if lead_shots_enabled else 0.0,
-            projectile_speed=self.projectile_speed_px_s,
+            projectile_speed=float(profile.get("projectile_speed_px_s", self.projectile_speed_px_s)),
             current_time=current_time,
             aim_line_angle=aim_line_angle,
-            min_confidence=getattr(self, "auto_aim_min_confidence", 0.62),
-            close_tap_range=close_tap_range,
+            min_confidence=float(profile.get("min_confidence", getattr(self, "auto_aim_min_confidence", 0.62))),
+            close_tap_range=float(profile.get("close_tap_range", close_tap_range)) if profile.get("close_tap_range", close_tap_range) is not None else None,
             close_range_override=getattr(self, "close_range_attack_override", True),
             dangerous_close_range=getattr(self, "dangerous_close_range", None),
             close_los_override_range=close_los_override_range,
@@ -387,6 +411,184 @@ class Movement:
             f"predicted_point={predicted_s} angle={angle_s} "
             f"fallback_reason={decision.aim_fallback_reason or 'none'} reason={decision.reason}"
         )
+
+    def _combatlog(self, *args):
+        if getattr(self, "combat_brain_debug", False) or visual_debug:
+            print("[COMBAT]", *args)
+
+    def _abilitylog(self, *args):
+        if getattr(self, "ability_brain_debug", False) or visual_debug:
+            print("[ABILITY]", *args)
+
+    def get_combat_profile(self, brawler):
+        profiles = getattr(self, "brawler_combat_profiles", {}) or {}
+        profile = profiles.get(str(brawler or "").strip().lower(), {})
+        return profile if isinstance(profile, dict) else {}
+
+    def target_score_from_attack_decision(self, decision, player_pos):
+        if not decision or not decision.target_bbox:
+            return None
+        center = self.get_enemy_pos(decision.target_bbox)
+        return TargetScore(
+            bbox=tuple(decision.target_bbox),
+            center=center,
+            distance=decision.distance,
+            score=max(0.0, min(1.0, float(decision.confidence or 0.0))),
+            line_of_sight=bool(decision.line_of_sight),
+            in_attack_range=bool(decision.in_range),
+            close_threat=bool(decision.close_threat or decision.use_tap),
+            stale=False,
+            reasons=[decision.reason] if decision.reason else [],
+        )
+
+    def build_health_state(self, health_ratio, heal_active, flicker_active=False, flicker_confidence=0.0):
+        confidence = 0.0
+        source = "unknown"
+        if health_ratio is not None:
+            confidence = 0.85
+            source = "color_bar"
+        if flicker_active:
+            confidence = max(confidence, min(1.0, 0.45 + float(flicker_confidence or 0.0) * 0.45))
+            source = "color_bar+flicker" if health_ratio is not None else "flicker"
+        return HealthState(
+            ratio=health_ratio,
+            confidence=confidence,
+            recent_damage=bool(flicker_active and flicker_confidence >= 0.50),
+            heal_active=bool(heal_active),
+            source=source,
+        )
+
+    def choose_combat_target_score(self, player_pos, enemy_data, walls, brawler, safe_range, attack_range, attack_decision=None):
+        if attack_decision and attack_decision.target_bbox:
+            return self.target_score_from_attack_decision(attack_decision, player_pos)
+        return choose_combat_target(
+            player_pos=player_pos,
+            enemy_data=enemy_data or [],
+            safe_range=safe_range,
+            attack_range=attack_range,
+            walls=walls or [],
+            can_attack_through_walls=self.can_attack_through_walls(brawler, "attack", self.brawlers_info),
+            walls_block_line_of_sight=self.walls_block_line_of_sight,
+            dangerous_close_range=self.close_attack_threat_threshold(attack_range),
+        )
+
+    def is_charge_path_safe(self, player_pos, target_score, walls):
+        if not target_score or target_score.center is None:
+            return False
+        angle = self.angle_from_direction(target_score.center[0] - player_pos[0], target_score.center[1] - player_pos[1])
+        if self.is_path_blocked_angle(player_pos, angle, walls, distance=max(60, min(target_score.distance or 60, self.TILE_SIZE * 2))):
+            return False
+        return not self.angle_points_into_fog(self.current_frame, player_pos, angle)
+
+    def choose_combat_ability_plan(
+            self,
+            brawler,
+            brawler_info,
+            player_pos,
+            enemy_data,
+            teammate_data,
+            walls,
+            safe_range,
+            attack_range,
+            target_score,
+            health_state,
+            intent_mode,
+            fog_flee_angle=None,
+            projectile_incoming=False):
+        if not getattr(self, "ability_brain_enabled", False):
+            return None
+        enemy_count_in_range = sum(
+            1 for enemy in (enemy_data or [])
+            if self.get_distance(self.get_enemy_pos(enemy), player_pos) <= attack_range
+        )
+        closest_teammate, teammate_distance = self.get_closest_teammate(
+            (player_pos[0], player_pos[1], player_pos[0], player_pos[1]),
+            teammate_data,
+        )
+        teammate_near = closest_teammate is not None and teammate_distance <= getattr(self, "teammate_combat_regroup_distance", 650)
+        threat = build_combat_threat_model(
+            target=target_score,
+            enemy_count_in_range=enemy_count_in_range,
+            health=health_state,
+            fog_danger=fog_flee_angle is not None or intent_mode == "escape_fog",
+            projectile_incoming=bool(projectile_incoming or intent_mode == "dodge_projectile"),
+            wall_trap=intent_mode in {"wall_escape", "unstuck"},
+            teammate_near=teammate_near,
+            safe_range=safe_range,
+        )
+        if intent_mode and intent_mode != threat.mode:
+            threat.mode = intent_mode
+        super_hittable = bool(
+            target_score and target_score.center is not None and self.is_enemy_hittable(player_pos, target_score.center, walls, "super")
+        )
+        attack_hittable = bool(target_score and target_score.line_of_sight)
+        profile = self.get_combat_profile(brawler)
+        plan = choose_ability_plan(
+            target=target_score,
+            threat=threat,
+            health=health_state,
+            super_type=profile.get("super_mode", brawler_info.get("super_type", "damage")),
+            super_ready=bool(getattr(self, "is_super_ready", False)),
+            gadget_ready=bool(getattr(self, "is_gadget_ready", False)),
+            hypercharge_ready=bool(getattr(self, "is_hypercharge_ready", False)),
+            gadget_enabled=bool(getattr(self, "should_use_gadget", True)) and profile.get("gadget_mode", "generic") != "disabled",
+            holding_attack=self.time_since_holding_attack is not None,
+            super_hittable=super_hittable,
+            attack_hittable=attack_hittable,
+            enemy_count_in_range=enemy_count_in_range,
+            teammate_near=teammate_near,
+            super_cooldown_remaining_ms=self.super_cooldown_remaining_ms(),
+            gadget_cooldown_remaining_ms=0,
+            super_min_value_score=float(profile.get("super_min_value_score", getattr(self, "super_min_value_score", 0.55))),
+            gadget_min_value_score=float(profile.get("gadget_min_value_score", getattr(self, "gadget_min_value_score", 0.50))),
+            hypercharge_min_value_score=float(profile.get("hypercharge_min_value_score", getattr(self, "hypercharge_min_value_score", 0.70))),
+            panic_super_range=float(profile.get("panic_super_range", getattr(self, "panic_super_range", 180))),
+            charge_path_safe=self.is_charge_path_safe(player_pos, target_score, walls),
+        )
+        self.log_ability_plan(plan, threat, target_score)
+        return plan
+
+    def log_ability_plan(self, plan, threat, target_score):
+        if not plan or not (getattr(self, "ability_brain_debug", False) or visual_debug):
+            return
+        now = time.time()
+        interval = max(0.0, getattr(self, "ability_retry_log_interval_ms", 500) / 1000.0)
+        if now - getattr(self, "_last_ability_plan_log", 0.0) < interval and not (
+                plan.use_super or plan.use_gadget or plan.use_hypercharge):
+            return
+        self._last_ability_plan_log = now
+        distance_s = None if not target_score or target_score.distance is None else int(target_score.distance)
+        self._abilitylog(
+            "ability_plan "
+            f"use_hypercharge={plan.use_hypercharge} reason_hypercharge={plan.hypercharge_reason} "
+            f"value_hypercharge={plan.hypercharge_value:.2f} "
+            f"use_super={plan.use_super} reason_super={plan.super_reason} value_super={plan.super_value:.2f} "
+            f"use_gadget={plan.use_gadget} reason_gadget={plan.gadget_reason} value_gadget={plan.gadget_value:.2f} "
+            f"threat_mode={threat.mode} threat_score={threat.score:.2f} target_distance={distance_s} "
+            f"denies={','.join(plan.denies) if plan.denies else 'none'}"
+        )
+
+    def execute_ability_plan(self, plan):
+        if not plan:
+            return False
+        used = False
+        if plan.use_hypercharge and getattr(self, "is_hypercharge_ready", False):
+            if self.use_hypercharge():
+                self.time_since_hypercharge_checked = time.time()
+                self.clear_ability_ready("hypercharge")
+                used = True
+        if plan.use_gadget and getattr(self, "is_gadget_ready", False):
+            if self.use_gadget():
+                self.time_since_gadget_checked = time.time()
+                self.clear_ability_ready("gadget")
+                used = True
+        if plan.use_super and getattr(self, "is_super_ready", False):
+            self.release_held_attack_for_super()
+            if self.use_super():
+                self.time_since_super_checked = time.time()
+                self.clear_ability_ready("super")
+                used = True
+        return used
 
     def auto_aim_attack(self, brawler, player_pos, enemy_data, walls, attack_range=None, decision=None):
         now = time.time()
@@ -2581,8 +2783,6 @@ class Play(Movement):
         if enemy_coords is None:
             return angle
 
-        self.try_use_super_on_enemy(brawler, brawler_info, player_pos, enemy_coords, enemy_distance, walls)
-
         vlog(f"showdown movement → angle={angle:.1f}°")
 
         attack_decision = self.choose_attack_decision(
@@ -2605,16 +2805,76 @@ class Play(Movement):
                 f"range={attack_range}px)"
             )
 
+        intent_mode = movement_intent.mode if movement_intent is not None else None
+        if intent_mode is None:
+            if heal_active:
+                intent_mode = "retreat_heal"
+            elif jump_pad_flee_angle is not None:
+                intent_mode = "escape_fog"
+            else:
+                intent_mode = "strafe_attack_lane" if attack_decision.should_fire else "approach"
+        health_state = self.build_health_state(
+            health_ratio,
+            heal_active,
+            flicker_active=flicker_active,
+            flicker_confidence=flicker_confidence,
+        )
+        target_score = self.choose_combat_target_score(
+            player_pos,
+            enemy_data,
+            walls,
+            brawler,
+            safe_range,
+            attack_range,
+            attack_decision=attack_decision,
+        )
+        ability_plan = None
+        combat_brain_active = bool(getattr(self, "combat_brain_enabled", False))
+        ability_brain_active = bool(combat_brain_active and getattr(self, "ability_brain_enabled", False))
+        if ability_brain_active:
+            ability_plan = self.choose_combat_ability_plan(
+                brawler,
+                brawler_info,
+                player_pos,
+                enemy_data,
+                teammate_data,
+                walls,
+                safe_range,
+                attack_range,
+                target_score,
+                health_state,
+                intent_mode,
+                fog_flee_angle=jump_pad_flee_angle,
+                projectile_incoming=intent_mode == "dodge_projectile",
+            )
+        else:
+            self.try_use_super_on_enemy(brawler, brawler_info, player_pos, enemy_coords, enemy_distance, walls)
+
+        ability_used = self.execute_ability_plan(ability_plan)
         attack_denied_by = None
         if not attack_decision.should_fire:
             attack_denied_by = attack_decision.denied_by or attack_decision.reason
-        elif (heal_active or not intent_attack_allowed or time.time() < getattr(self, "_suppress_attack_until", 0.0)) and getattr(self, "attack_decision_debug", False):
-            self._aimlog(
-                "attack_defensive_gate_ignored "
-                f"heal_active={heal_active} intent_attack_allowed={intent_attack_allowed} "
-                f"suppress_remaining_ms={max(0, int((getattr(self, '_suppress_attack_until', 0.0) - time.time()) * 1000))} "
-                f"selected_distance={int(attack_decision.distance or enemy_distance)} attack_range={int(attack_range)}"
+        else:
+            suppress_active = time.time() < getattr(self, "_suppress_attack_until", 0.0)
+            gate_mode = intent_mode
+            if not intent_attack_allowed and gate_mode not in {"escape_fog", "wall_escape", "unstuck", "retreat_heal", "dodge_projectile"}:
+                gate_mode = "dodge_projectile"
+            allowed, gate_reason = choose_attack_gate(
+                mode=gate_mode,
+                target=target_score,
+                health=health_state,
+                defensive_gate_enabled=bool(combat_brain_active and getattr(self, "defensive_attack_gate_enabled", True)),
+                panic_shot_range=float(self.get_combat_profile(brawler).get("panic_shot_range", getattr(self, "panic_shot_range", 150))),
+                suppress_active=suppress_active,
             )
+            if not allowed:
+                attack_denied_by = gate_reason or "movement_intent_blocks_attack"
+            elif gate_reason == "panic_shot" and getattr(self, "attack_decision_debug", False):
+                self._aimlog(
+                    "attack_defensive_gate_override "
+                    f"reason=panic_shot heal_active={heal_active} intent_attack_allowed={intent_attack_allowed} "
+                    f"selected_distance={int(attack_decision.distance or enemy_distance)} attack_range={int(attack_range)}"
+                )
 
         if attack_denied_by:
             self.log_attack_decision(
@@ -2624,12 +2884,15 @@ class Play(Movement):
                 denied_by=attack_denied_by,
             )
         else:
-            if self.should_use_gadget_on_enemy(brawler, player_data, enemy_data, walls):
+            if (not ability_brain_active) and self.should_use_gadget_on_enemy(brawler, player_data, enemy_data, walls):
                 if self.use_gadget():
                     self.time_since_gadget_checked = time.time()
                     self.clear_ability_ready("gadget")
 
-            if not must_brawler_hold_attack:
+            skip_basic_attack = bool(ability_used and ability_plan and ability_plan.use_super)
+            if skip_basic_attack:
+                self._aimlog("attack_skipped reason=super_ability_plan_executed")
+            elif not must_brawler_hold_attack:
                 self.auto_aim_attack(
                     brawler,
                     player_pos,
@@ -2952,17 +3215,21 @@ class Play(Movement):
         the first hit is always the least deviation from the goal direction.
         Returns desired_angle unchanged if no walls (or no clear path found).
         """
+        angle, _safe, _reason = self.find_best_angle_status(player_pos, desired_angle, walls, sweep_range=sweep_range, step=step)
+        return angle
+
+    def find_best_angle_status(self, player_pos, desired_angle, walls, sweep_range=160, step=10):
+        """Return (angle, safe, reason) for wall-aware movement selection."""
         if not self.is_path_blocked_angle(player_pos, desired_angle, walls):
-            return desired_angle
+            return desired_angle, True, "clear"
 
         for offset in range(step, sweep_range + 1, step):
             for sign in (1, -1):
                 candidate = (desired_angle + sign * offset) % 360
                 if not self.is_path_blocked_angle(player_pos, candidate, walls):
-                    return candidate
+                    return candidate, True, "adjusted"
 
-        # Nothing clear found — return desired anyway (better than stopping)
-        return desired_angle
+        return desired_angle, False, "no_safe_angle"
 
     @staticmethod
     def validate_game_data(data):
@@ -3278,8 +3545,54 @@ class Play(Movement):
         setattr(self, f"_{ability_name}_ready_seen_at", 0.0)
         setattr(self, f"is_{ability_name}_ready", False)
 
-    def try_use_ready_abilities_when_enemy_visible(self, enemy_data):
-        return False
+    def try_use_ready_abilities_when_enemy_visible(
+            self,
+            enemy_data,
+            brawler=None,
+            brawler_info=None,
+            player_data=None,
+            walls=None,
+            teammate_data=None,
+            safe_range=None,
+            attack_range=None,
+            intent_mode="strafe_attack_lane",
+            health_state=None):
+        """Use ready abilities only when enough combat context is available.
+
+        The old visible-enemy fallback was intentionally inert to avoid spam.
+        Keep that safety: no player/context means no ability press.
+        """
+        if not (getattr(self, "combat_brain_enabled", False) and getattr(self, "ability_brain_enabled", False)):
+            return False
+        if not enemy_data or player_data is None or not brawler or not brawler_info:
+            return False
+        walls = walls or []
+        teammate_data = teammate_data or []
+        player_pos = self.get_player_pos(player_data)
+        if safe_range is None or attack_range is None:
+            safe_range, attack_range, _ = self.get_brawler_range(brawler)
+        target_score = self.choose_combat_target_score(
+            player_pos,
+            enemy_data,
+            walls,
+            brawler,
+            safe_range,
+            attack_range,
+        )
+        plan = self.choose_combat_ability_plan(
+            brawler,
+            brawler_info,
+            player_pos,
+            enemy_data,
+            teammate_data,
+            walls,
+            safe_range,
+            attack_range,
+            target_score,
+            health_state or HealthState(),
+            intent_mode,
+        )
+        return self.execute_ability_plan(plan)
 
     def refresh_ready_abilities(self, frame, current_time):
         if current_time - self.time_since_hypercharge_checked > self.hypercharge_treshold:
