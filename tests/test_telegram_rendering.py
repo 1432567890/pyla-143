@@ -32,7 +32,8 @@ class TelegramRenderingTests(unittest.TestCase):
     def test_russian_game_finished_title(self):
         text = telegram_notifier._format_message("match", {"brawler": "Colt", "delta": 8}, language="ru")
         self.assertIn("<b>Матч заверш", text)
-        self.assertIn("Боец: Colt", text)
+        self.assertNotIn("Боец: Colt", text)
+        self.assertIn("Изменение: 8", text)
 
     def test_photo_fallback_without_screenshot_returns_message(self):
         async def run():

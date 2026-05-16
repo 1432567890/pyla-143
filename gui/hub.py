@@ -193,6 +193,14 @@ class Hub:
         self.telegram_config.setdefault("notify_on_brawler_change", True)
         self.telegram_config.setdefault("notify_on_config_reload", True)
         self.telegram_config.setdefault("notify_on_trophy_update", True)
+        self.telegram_config.setdefault("business_enabled", False)
+        self.telegram_config.setdefault("business_connection_id", "")
+        self.telegram_config.setdefault("business_connection_user_id", "")
+        self.telegram_config.setdefault("business_connection_user_chat_id", "")
+        self.telegram_config.setdefault("business_name_template", "{trophies}")
+        self.telegram_config.setdefault("business_change_name_enabled", False)
+        self.telegram_config.setdefault("business_bio_template", "{trophies}")
+        self.telegram_config.setdefault("business_change_bio_enabled", False)
 
         # -----------------------------------------------------------------------------------------
         # Appearance
@@ -1401,6 +1409,17 @@ class Hub:
         create_toggle("Heartbeat:", "heartbeat_enabled")
         create_entry("Heartbeat Interval Seconds:", "heartbeat_interval_sec", lambda s: 300 if s == "" else int(s), width=120)
         create_entry("Buttons Mode:", "notification_buttons_mode", str, width=160)
+        business_label = ctk.CTkLabel(container, text="Telegram Business", font=font(S(20), "bold"))
+        business_label.grid(row=row_idx, column=0, columnspan=2, sticky="n", padx=S(20), pady=(S(18), S(6)))
+        row_idx += 1
+        create_toggle("Business Mode:", "business_enabled")
+        create_entry("Business Connection ID:", "business_connection_id", str, width=440)
+        create_entry("Business User ID:", "business_connection_user_id", str, width=220)
+        create_entry("Business User Chat ID:", "business_connection_user_chat_id", str, width=220)
+        create_toggle("Change Business Name:", "business_change_name_enabled")
+        create_entry("Business Name Template:", "business_name_template", str, width=300)
+        create_toggle("Change Business Bio:", "business_change_bio_enabled")
+        create_entry("Business Bio Template:", "business_bio_template", str, width=300)
 
         container.grid_columnconfigure(0, weight=1)
         container.grid_columnconfigure(1, weight=1)

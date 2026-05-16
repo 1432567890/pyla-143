@@ -21,6 +21,7 @@ from telegram_notifier import (
     async_edit_message,
     async_send_message,
     async_send_photo,
+    effective_business_connection,
     load_business_connection,
     load_telegram_settings,
     main_keyboard,
@@ -51,6 +52,12 @@ def is_admin(settings: dict[str, Any], user_id: int | str | None) -> bool:
     if not admins:
         return False
     return str(user_id) in admins
+
+
+def business_connection_belongs_to_admin(settings: dict[str, Any], connection: dict[str, Any]) -> bool:
+    user = connection.get("user") if isinstance(connection.get("user"), dict) else {}
+    user_id = user.get("id") or connection.get("user_id") or connection.get("user_chat_id")
+    return is_admin(settings, user_id)
 
 
 def _short(value: Any, fallback: str = "unknown") -> str:
@@ -122,13 +129,18 @@ def _yes_no(value: Any, unknown: str = "unknown") -> str:
 
 def business_status_text(settings: dict[str, Any] | None = None) -> str:
     settings = settings or load_telegram_settings()
-    connection = load_business_connection()
+    saved_connection = load_business_connection()
+    connection = effective_business_connection(settings)
     connection_id = str(connection.get("id") or "").strip()
+    source = "manual" if str(settings.get("business_connection_id") or "").strip() else ("auto" if saved_connection else "missing")
     lines = [
         "<b>Telegram Business</b>",
         "────────────────",
         f"Business mode: {_yes_no(_config_bool(settings.get('business_enabled'), False))}",
         f"Connection ID: {html.escape(connection_id if connection_id else 'missing')}",
+        f"Connection source: {html.escape(source)}",
+        f"Connection user ID: {html.escape(str(connection.get('user_id') or 'unknown'))}",
+        f"Connection user: {html.escape(str(connection.get('user_chat_id') or 'unknown'))}",
         f"Connection active: {_yes_no(connection.get('is_enabled') if connection_id else None)}",
         f"Can change name: {_yes_no(connection.get('can_change_name'))}",
         f"Can change bio: {_yes_no(connection.get('can_change_bio'))}",
@@ -335,9 +347,13 @@ class TelegramControlServer:
             return
 
         settings = self.settings_loader()
-        if not _config_bool(settings.get("remote_control_enabled"), True):
-            return
         command = text.split()[0].split("@", 1)[0].lower()
+        business_command_allowed = (
+                _config_bool(settings.get("business_enabled"), False)
+                and command in {"/help", "/start", "/business_connection"}
+        )
+        if not _config_bool(settings.get("remote_control_enabled"), True) and not business_command_allowed:
+            return
         print(f"telegram_command_received command={command} chat_id={chat_id}")
         remember_chat_id(chat_id)
         if not is_admin(settings, user.get("id")):
@@ -347,6 +363,8 @@ class TelegramControlServer:
 
         if command in {"/help", "/start"}:
             await async_send_message(chat_id, self._welcome_text(), token=token, reply_markup=self._keyboard())
+        elif command == "/business_connection":
+            await async_send_message(chat_id, self._business_connection_reply(), token=token, reply_markup=self._keyboard())
         elif command in {"/pause"}:
             await self._pause(chat_id, token)
         elif command in {"/resume"}:
@@ -445,6 +463,14 @@ class TelegramControlServer:
         settings = self.settings_loader()
         if not _config_bool(settings.get("business_enabled"), False):
             return
+        if not business_connection_belongs_to_admin(settings, connection):
+            print(
+                "telegram_business_connection_ignored",
+                f"user_id={(connection.get('user') or {}).get('id') if isinstance(connection.get('user'), dict) else connection.get('user_id', '')}",
+                f"user_chat_id={connection.get('user_chat_id', '')}",
+                "reason=not_admin",
+            )
+            return
         changed = remember_business_connection(connection)
         rights = connection.get("rights") or {}
         print(
@@ -466,7 +492,7 @@ class TelegramControlServer:
             return
         self._last_business_name_update = time.time()
 
-        connection = load_business_connection()
+        connection = effective_business_connection(settings)
         connection_id = str(connection.get("id") or "").strip()
         if not connection_id:
             print("telegram_business_name_update_skipped reason=missing_business_connection")
@@ -595,6 +621,23 @@ class TelegramControlServer:
         settings = self.settings_loader()
         status = self._status_text().replace("<b>Pyla 143 status</b>", "<b>Pyla 143 control</b>", 1)
         return f"{status}\n\n{business_status_text(settings)}"
+
+    def _business_connection_reply(self) -> str:
+        settings = self.settings_loader()
+        connection = effective_business_connection(settings)
+        connection_id = str(connection.get("id") or "").strip()
+        user_chat_id = str(connection.get("user_chat_id") or "").strip()
+        user_id = str(connection.get("user_id") or "").strip()
+        return "\n".join([
+            "<b>Business connection</b>",
+            "────────────────",
+            f"ID: <code>{html.escape(connection_id if connection_id else 'missing')}</code>",
+            f"User ID: <code>{html.escape(user_id if user_id else 'unknown')}</code>",
+            f"User: <code>{html.escape(user_chat_id if user_chat_id else 'unknown')}</code>",
+            f"Active: {_yes_no(connection.get('is_enabled') if connection_id else None)}",
+            f"Can change name: {_yes_no(connection.get('can_change_name'))}",
+            f"Can change bio: {_yes_no(connection.get('can_change_bio'))}",
+        ])
 
     def _status_text(self) -> str:
         details = self.status_provider() if self.status_provider else {}

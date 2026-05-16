@@ -5,7 +5,14 @@ from unittest.mock import patch
 
 import telegram_notifier
 from runtime_control import PAUSED, RUNNING, read_state
-from telegram_control import business_status_text, format_business_name, format_business_trophies, set_runtime_state
+from telegram_control import (
+    TelegramControlServer,
+    business_connection_belongs_to_admin,
+    business_status_text,
+    format_business_name,
+    format_business_trophies,
+    set_runtime_state,
+)
 
 
 class TelegramSupportTests(unittest.TestCase):
@@ -63,6 +70,9 @@ class TelegramSupportTests(unittest.TestCase):
         self.assertEqual(settings["business_name_template"], "{trophies}")
         self.assertFalse(settings["business_change_bio_enabled"])
         self.assertEqual(settings["business_bio_template"], "{trophies}")
+        self.assertEqual(settings["business_connection_id"], "")
+        self.assertEqual(settings["business_connection_user_id"], "")
+        self.assertEqual(settings["business_connection_user_chat_id"], "")
 
     def test_business_trophy_format_uses_truncated_decimal_k(self):
         self.assertEqual(format_business_trophies(64834), "64,8k")
@@ -83,6 +93,7 @@ class TelegramSupportTests(unittest.TestCase):
                 telegram_notifier.remember_business_connection({
                     "id": "bc-1",
                     "is_enabled": True,
+                    "user": {"id": 123},
                     "user_chat_id": 456,
                     "rights": {"can_change_name": True, "can_change_bio": True},
                 })
@@ -92,6 +103,7 @@ class TelegramSupportTests(unittest.TestCase):
         self.assertEqual(connection["id"], "bc-1")
         self.assertTrue(connection["can_change_name"])
         self.assertTrue(connection["can_change_bio"])
+        self.assertEqual(connection["user_id"], "123")
         self.assertEqual(connection["user_chat_id"], "456")
 
     def test_business_status_reports_connection_and_rights(self):
@@ -117,6 +129,46 @@ class TelegramSupportTests(unittest.TestCase):
         self.assertIn("Can change name: no", text)
         self.assertIn("Can change bio: yes", text)
         self.assertIn("Bio updates: yes", text)
+
+    def test_business_status_uses_manual_connection_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chat_path = Path(tmp) / "telegram_chats.toml"
+            with patch.object(telegram_notifier, "TELEGRAM_CHATS_PATH", str(chat_path)):
+                text = business_status_text({
+                    "business_enabled": True,
+                    "business_connection_id": "manual-bc",
+                    "business_connection_user_id": "123",
+                    "business_connection_user_chat_id": "123",
+                    "business_change_name_enabled": False,
+                    "business_name_template": "{trophies}",
+                    "business_change_bio_enabled": True,
+                    "business_bio_template": "{trophies}",
+                })
+
+        self.assertIn("Connection ID: manual-bc", text)
+        self.assertIn("Connection source: manual", text)
+        self.assertIn("Connection user ID: 123", text)
+
+    def test_business_connection_requires_admin_user_chat_id(self):
+        settings = {"admin_ids": ["123"]}
+
+        self.assertTrue(business_connection_belongs_to_admin(settings, {"user": {"id": 123}, "user_chat_id": 456}))
+        self.assertFalse(business_connection_belongs_to_admin(settings, {"user": {"id": 456}, "user_chat_id": 123}))
+
+    def test_business_connection_reply_uses_code_tags(self):
+        server = TelegramControlServer(
+            Path("runtime.state"),
+            settings_loader=lambda: {
+                "business_connection_id": "manual-bc",
+                "business_connection_user_id": "123",
+                "business_connection_user_chat_id": "123",
+            },
+        )
+
+        text = server._business_connection_reply()
+
+        self.assertIn("<code>manual-bc</code>", text)
+        self.assertIn("<code>123</code>", text)
 
     def test_match_summary_hides_potentially_stale_brawler_name(self):
         text = telegram_notifier._format_message("match", {"result": "4th", "brawler": "amber"}, language="en")

@@ -68,6 +68,12 @@ def load_telegram_settings() -> dict[str, Any]:
     settings.setdefault("business_name_template", "{trophies}")
     settings.setdefault("business_change_bio_enabled", False)
     settings.setdefault("business_bio_template", "{trophies}")
+    settings.setdefault("business_connection_id", "")
+    settings.setdefault("business_connection_user_id", "")
+    settings.setdefault("business_connection_user_chat_id", "")
+    settings["business_connection_id"] = str(settings.get("business_connection_id") or "").strip()
+    settings["business_connection_user_id"] = str(settings.get("business_connection_user_id") or "").strip()
+    settings["business_connection_user_chat_id"] = str(settings.get("business_connection_user_chat_id") or "").strip()
     settings["language"] = normalize_language(settings.get("language") or get_config_language())
     return settings
 
@@ -101,6 +107,22 @@ def load_business_connection() -> dict[str, Any]:
     return connection if isinstance(connection, dict) else {}
 
 
+def effective_business_connection(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = settings or load_telegram_settings()
+    connection = dict(load_business_connection())
+    manual_id = str(settings.get("business_connection_id") or "").strip()
+    if manual_id:
+        connection["id"] = manual_id
+        connection.setdefault("is_enabled", True)
+        manual_user_id = str(settings.get("business_connection_user_id") or "").strip()
+        if manual_user_id:
+            connection["user_id"] = manual_user_id
+        manual_user_chat_id = str(settings.get("business_connection_user_chat_id") or "").strip()
+        if manual_user_chat_id:
+            connection["user_chat_id"] = manual_user_chat_id
+    return connection
+
+
 def remember_business_connection(connection: dict[str, Any]) -> bool:
     connection_id = str(connection.get("id") or "").strip()
     if not connection_id:
@@ -113,6 +135,9 @@ def remember_business_connection(connection: dict[str, Any]) -> bool:
         "is_enabled": bool(connection.get("is_enabled", True)),
         "user_chat_id": str(connection.get("user_chat_id") or ""),
     }
+    user = connection.get("user") if isinstance(connection.get("user"), dict) else {}
+    if user.get("id"):
+        cleaned["user_id"] = str(user.get("id"))
     if "can_change_name" in rights:
         cleaned["can_change_name"] = bool(rights.get("can_change_name"))
     if "can_change_bio" in rights:
