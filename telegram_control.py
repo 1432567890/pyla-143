@@ -112,6 +112,34 @@ def _status_from_details(state_path: str | Path, details: dict[str, Any], stats:
     return "\n".join(lines)
 
 
+def _yes_no(value: Any, unknown: str = "unknown") -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return unknown
+
+
+def business_status_text(settings: dict[str, Any] | None = None) -> str:
+    settings = settings or load_telegram_settings()
+    connection = load_business_connection()
+    connection_id = str(connection.get("id") or "").strip()
+    lines = [
+        "<b>Telegram Business</b>",
+        "────────────────",
+        f"Business mode: {_yes_no(_config_bool(settings.get('business_enabled'), False))}",
+        f"Connection ID: {html.escape(connection_id if connection_id else 'missing')}",
+        f"Connection active: {_yes_no(connection.get('is_enabled') if connection_id else None)}",
+        f"Can change name: {_yes_no(connection.get('can_change_name'))}",
+        f"Can change bio: {_yes_no(connection.get('can_change_bio'))}",
+        f"Name updates: {_yes_no(_config_bool(settings.get('business_change_name_enabled'), False))}",
+        f"Bio updates: {_yes_no(_config_bool(settings.get('business_change_bio_enabled'), False))}",
+        f"Name template: {html.escape(str(settings.get('business_name_template') or ''))}",
+        f"Bio template: {html.escape(str(settings.get('business_bio_template') or ''))}",
+    ]
+    return "\n".join(lines)
+
+
 def _current_brawler_trophies(stats: dict[str, Any], brawler: str) -> Any:
     row = stats.get("brawlers", {}).get(brawler, {})
     return row.get("current_trophies") if isinstance(row, dict) else None
@@ -564,7 +592,9 @@ class TelegramControlServer:
         )
 
     def _welcome_text(self) -> str:
-        return self._status_text().replace("<b>Pyla 143 status</b>", "<b>Pyla 143 control</b>", 1)
+        settings = self.settings_loader()
+        status = self._status_text().replace("<b>Pyla 143 status</b>", "<b>Pyla 143 control</b>", 1)
+        return f"{status}\n\n{business_status_text(settings)}"
 
     def _status_text(self) -> str:
         details = self.status_provider() if self.status_provider else {}

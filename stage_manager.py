@@ -290,6 +290,7 @@ class StageManager:
         if not selected:
             print("Could not confirm next brawler selection after restart.")
             return False
+        self.sync_actual_selected_brawler()
 
         self.window_controller.press_key("Q")
         print("Target-completion restart finished; selected next brawler and started matchmaking.")
@@ -302,6 +303,27 @@ class StageManager:
             loop.run_until_complete(async_notify_user(event_type, screenshot, details=details or {}))
         finally:
             loop.close()
+
+    def sync_actual_selected_brawler(self):
+        actual = str(getattr(self.Lobby_automation, "last_selected_brawler", "") or "").strip()
+        if not actual or not self.brawlers_pick_data:
+            return False
+        current = str(self.brawlers_pick_data[0].get("brawler", "") or "").strip()
+        if normalize_brawler_name(actual) == normalize_brawler_name(current):
+            return False
+        print(
+            "actual_brawler_selection_sync",
+            f"queued_brawler={current}",
+            f"selected_brawler={actual}",
+        )
+        self.brawlers_pick_data[0]["brawler"] = actual
+        self.started_trophies_by_brawler.setdefault(
+            actual.lower(),
+            self.brawlers_pick_data[0].get("trophies", 0),
+        )
+        save_brawler_data(self.brawlers_pick_data)
+        record_brawler(actual, self.brawlers_pick_data[0].get("trophies", None))
+        return True
 
     def current_target_details(self, extra=None):
         current = self.brawlers_pick_data[0] if self.brawlers_pick_data else {}
@@ -749,6 +771,7 @@ class StageManager:
                         print("Could not confirm the next brawler selection reached lobby; delaying match start.")
                         self.window_controller.keys_up(list("wasd"))
                         return
+                    self.sync_actual_selected_brawler()
             else:
                 print("Next brawler is in manual mode, waiting 10 seconds to let user switch.")
 
@@ -759,6 +782,7 @@ class StageManager:
                 print("Could not confirm the API-refreshed brawler selection reached lobby; delaying match start.")
                 self.window_controller.keys_up(list("wasd"))
                 return
+            self.sync_actual_selected_brawler()
 
         # q btn is over the start btn
         self.window_controller.keys_up(list("wasd"))
@@ -939,7 +963,8 @@ class StageManager:
             self.window_controller.press_key("Q")
             return
 
-        self.Lobby_automation.select_lowest_trophy_brawler()
+        if self.Lobby_automation.select_lowest_trophy_brawler():
+            self.sync_actual_selected_brawler()
 
     def end_game(self):
         screenshot = self.window_controller.screenshot()

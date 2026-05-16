@@ -140,9 +140,6 @@ def _format_title(event_type: str, details: dict[str, Any], language: str | None
     title = tr(f"telegram.title.{event_type}", language, "Pyla 143 update")
     if event_type == "match":
         result = str(details.get("result") or "finished")
-        brawler = str(details.get("brawler") or "").title()
-        if brawler:
-            return f"{title}: {result} with {brawler}"
         return f"{title}: {result}"
     return title
 
@@ -159,6 +156,8 @@ def _format_message(event_type: str, details: dict[str, Any], language: str | No
         lines.append(html.escape(message))
 
     hidden = {"message", "reason", "event_type", "language"}
+    if event_type == "match":
+        hidden.add("brawler")
     ordered = [
         "brawler",
         "result",

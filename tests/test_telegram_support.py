@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import telegram_notifier
 from runtime_control import PAUSED, RUNNING, read_state
-from telegram_control import format_business_name, format_business_trophies, set_runtime_state
+from telegram_control import business_status_text, format_business_name, format_business_trophies, set_runtime_state
 
 
 class TelegramSupportTests(unittest.TestCase):
@@ -93,6 +93,36 @@ class TelegramSupportTests(unittest.TestCase):
         self.assertTrue(connection["can_change_name"])
         self.assertTrue(connection["can_change_bio"])
         self.assertEqual(connection["user_chat_id"], "456")
+
+    def test_business_status_reports_connection_and_rights(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            chat_path = Path(tmp) / "telegram_chats.toml"
+            with patch.object(telegram_notifier, "TELEGRAM_CHATS_PATH", str(chat_path)):
+                telegram_notifier.remember_business_connection({
+                    "id": "bc-1",
+                    "is_enabled": True,
+                    "rights": {"can_change_name": False, "can_change_bio": True},
+                })
+                text = business_status_text({
+                    "business_enabled": True,
+                    "business_change_name_enabled": False,
+                    "business_name_template": "{trophies}",
+                    "business_change_bio_enabled": True,
+                    "business_bio_template": "{trophies}",
+                })
+
+        self.assertIn("Business mode: yes", text)
+        self.assertIn("Connection ID: bc-1", text)
+        self.assertIn("Connection active: yes", text)
+        self.assertIn("Can change name: no", text)
+        self.assertIn("Can change bio: yes", text)
+        self.assertIn("Bio updates: yes", text)
+
+    def test_match_summary_hides_potentially_stale_brawler_name(self):
+        text = telegram_notifier._format_message("match", {"result": "4th", "brawler": "amber"}, language="en")
+
+        self.assertNotIn("Amber", text)
+        self.assertIn("4th", text)
 
     def test_set_runtime_state_writes_pause_file(self):
         with tempfile.TemporaryDirectory() as tmp:

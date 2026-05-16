@@ -10,6 +10,7 @@ from utils import (
     extract_text_strings,
     count_hsv_pixels,
     load_toml_as_dict,
+    load_brawlers_info,
     find_template_center,
     resolve_brawler_name_alias,
 )
@@ -29,6 +30,7 @@ class LobbyAutomation:
         self.coords_cfg = load_toml_as_dict("./cfg/lobby_config.toml")
         self.coords_cfg["lobby"] = {**DEFAULT_LOBBY_COORDS, **self.coords_cfg.get("lobby", {})}
         self.window_controller = window_controller
+        self.last_selected_brawler = ""
 
     def _read_state(self):
         try:
@@ -261,6 +263,7 @@ class LobbyAutomation:
                 self.window_controller.click(select_x, select_y, already_include_ratio=False)
                 time.sleep(0.5)
                 print(f"Selected brawler {brawler}")
+                self.last_selected_brawler = brawler
                 found_brawler = True
                 break
             if c == 0:
@@ -365,15 +368,53 @@ class LobbyAutomation:
         tap(1210, 45, 0.6)   # sort dropdown
         tap(1210, 426, 1.0)  # Least Trophies
         tap(422, 359, 1.0)   # first brawler card after sorting
+        selected_name = self.read_open_brawler_card_name()
         tap(260, 991, 1.0)   # Select
         if self.ensure_lobby_after_selection():
+            self.last_selected_brawler = selected_name or ""
+            if selected_name:
+                print(f"Selected lowest-trophy brawler confirmed by OCR: {selected_name}")
+            else:
+                print("Selected lowest-trophy brawler, but card name OCR was unavailable.")
             return True
 
         print("Lowest-trophy brawler selection did not return to lobby; trying one recovery pass.")
         self.press_back()
         time.sleep(0.8)
         tap(260, 991, 1.0)   # Select again if the brawler details screen is still open
-        return self.ensure_lobby_after_selection()
+        selected = self.ensure_lobby_after_selection()
+        if selected:
+            self.last_selected_brawler = selected_name or ""
+        return selected
+
+    def read_open_brawler_card_name(self):
+        try:
+            screenshot = self.window_controller.screenshot()
+            height = screenshot.shape[0]
+            crop = screenshot[int(height * 0.04):int(height * 0.24), 0:screenshot.shape[1]]
+            texts = extract_text_strings(crop)
+        except Exception as e:
+            print(f"Could not OCR selected brawler card name: {e}")
+            return ""
+
+        candidates = list(load_brawlers_info().keys())
+        if not candidates:
+            return ""
+        best_name = ""
+        best_score = 0.0
+        for raw_text in texts:
+            detected = self.resolve_ocr_typos(self.normalize_ocr_name(raw_text))
+            if not detected:
+                continue
+            for candidate in candidates:
+                target = self.normalize_ocr_name(candidate)
+                if not self.names_match(detected, target):
+                    continue
+                score = self.name_match_score(detected, target)
+                if score > best_score:
+                    best_name = candidate
+                    best_score = score
+        return best_name
 
     def ensure_lobby_after_selection(self, timeout=6.0):
         deadline = time.time() + timeout

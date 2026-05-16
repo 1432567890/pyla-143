@@ -176,11 +176,18 @@ def pyla_main(data):
             self.Stage_manager = StageManager(data, self.lobby_automator, self.window_controller)
             self.Stage_manager.adaptive_brain.apply_to_play(self.Play)
             self.states_requiring_data = ["lobby"]
+            self.initial_brawler_selection_failed = False
             if data[0]['automatically_pick']:
                 print("Picking brawler automatically")
                 if not self.lobby_automator.select_brawler(data[0]['brawler']):
-                    print("Automatic brawler pick failed; continuing without crashing.")
-            self.Play.current_brawler = data[0]['brawler']
+                    print("Automatic brawler pick failed; pausing to avoid playing with a stale brawler profile.")
+                    self.initial_brawler_selection_failed = True
+                else:
+                    self.Stage_manager.sync_actual_selected_brawler()
+            self.Play.current_brawler = (
+                self.Stage_manager.brawlers_pick_data[0].get("brawler", "")
+                if self.Stage_manager.brawlers_pick_data else data[0].get("brawler", "")
+            )
             self.no_detections_action_threshold = 60 * 8
             self.initialize_stage_manager()
             self.state = None
@@ -320,6 +327,15 @@ def pyla_main(data):
             )
             self.telegram_control.start()
             self.send_runtime_notification("start")
+            if self.initial_brawler_selection_failed:
+                write_state(self.control_window.state_path, PAUSED)
+                self.send_runtime_notification(
+                    "error",
+                    {
+                        "reason": "Automatic brawler selection failed. Bot paused to avoid using a stale brawler profile.",
+                        "brawler": self.Play.current_brawler or "",
+                    },
+                )
             self.was_paused = False
             self.pause_started_at = None
             self.stop_requested = False
@@ -604,6 +620,7 @@ def pyla_main(data):
         def replay_duplicate_match_frame(self, frame):
             self.last_duplicate_frame_replay = time.time()
             brawler = self.Stage_manager.brawlers_pick_data[0]['brawler']
+            self.Play.current_brawler = brawler
             play_start = time.perf_counter()
             self.Play.main(frame, brawler, self)
             self.perf_play_ema = self.update_ema(
@@ -1225,6 +1242,7 @@ def pyla_main(data):
                     continue
 
                 brawler = self.Stage_manager.brawlers_pick_data[0]['brawler']
+                self.Play.current_brawler = brawler
                 play_start = time.perf_counter()
                 self.Play.main(frame, brawler, self)
                 self.perf_play_ema = self.update_ema(
