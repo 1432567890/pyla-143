@@ -63,6 +63,7 @@ from utils import (
     get_latest_wall_model_file,
     load_toml_as_dict,
     load_saved_brawler_data,
+    normalize_brawler_name,
     save_brawler_data,
     update_missing_brawlers_info,
     update_wall_model_classes,
@@ -85,6 +86,21 @@ def parse_max_ips(value):
     if max_ips <= 0:
         return None
     return max_ips
+
+
+def stats_trophies_for_brawler(stats, brawler):
+    target = normalize_brawler_name(brawler)
+    if not target:
+        return None
+    for name, row in (stats.get("brawlers", {}) or {}).items():
+        if normalize_brawler_name(name) != target or not isinstance(row, dict):
+            continue
+        trophies = row.get("current_trophies")
+        try:
+            return int(trophies)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 OUT_OF_MATCH_REWARD_STATES = {"prestige_reward", "trophy_reward"}
@@ -367,16 +383,20 @@ def pyla_main(data):
             current = self.Stage_manager.brawlers_pick_data[0] if self.Stage_manager.brawlers_pick_data else {}
             bot_config = load_toml_as_dict("cfg/bot_config.toml")
             stats = load_stats()
+            brawler = current.get("brawler", "") or getattr(self.Play, "current_brawler", "") or stats.get("current_brawler", "")
+            observed_trophies = getattr(self.Stage_manager.Trophy_observer, "current_trophies", None)
+            if observed_trophies is None:
+                observed_trophies = stats_trophies_for_brawler(stats, brawler)
             return {
                 "state": self.state or "unknown",
                 "ips": f"{self.ips_ema:.2f}" if self.ips_ema is not None else "",
                 "feed_fps": f"{self.perf_feed_fps:.2f}",
                 "emulator": getattr(self.window_controller, "selected_emulator", ""),
                 "adb_device": getattr(getattr(self.window_controller, "device", None), "serial", ""),
-                "brawler": current.get("brawler", ""),
+                "brawler": brawler,
                 "target": current.get("push_until", ""),
                 "playstyle": bot_config.get("current_playstyle", ""),
-                "trophies": current.get("trophies", stats.get("brawlers", {}).get(current.get("brawler", ""), {}).get("current_trophies", "")),
+                "trophies": observed_trophies if observed_trophies is not None else "",
                 "api_confirmation": getattr(self.Stage_manager, "goal_confirmation_status", {}),
             }
 
@@ -410,7 +430,15 @@ def pyla_main(data):
                 "automatically_pick": False,
                 "win_streak": 0,
             }
+            previous_brawler = current.get("brawler", "")
             next_row["brawler"] = brawler
+            known_trophies = stats_trophies_for_brawler(load_stats(), brawler)
+            if known_trophies is not None:
+                next_row["trophies"] = known_trophies
+            elif normalize_brawler_name(previous_brawler) != normalize_brawler_name(brawler):
+                next_row["trophies"] = 0
+                next_row["wins"] = 0
+                next_row["win_streak"] = 0
             if self.state == "match":
                 self.pending_brawler_change = next_row
                 apply_mode = "after current match"

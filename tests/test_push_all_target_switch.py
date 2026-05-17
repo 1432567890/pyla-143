@@ -78,15 +78,17 @@ class PushAllTargetSwitchTest(unittest.TestCase):
         manager.window_controller = DummyWindowController()
         manager.Lobby_automation = DummyLobbyAutomation()
         manager.send_webhook_notification = lambda *args, **kwargs: None
+        manager.confirm_goal_reached_via_api = lambda *args, **kwargs: True
         manager.push_all_needs_selection = False
         manager.stop_after_post_match_rewards = False
         return manager
 
     @patch.object(StageManager, "refresh_push_all_trophies_from_api", return_value=False)
     @patch("stage_manager.save_brawler_data")
+    @patch("stage_manager.record_brawler")
     @patch("stage_manager.time.sleep", return_value=None)
     @patch("stage_manager.get_state", return_value="lobby")
-    def test_push_all_targets_switch_by_lowest_trophy_sort(self, *_):
+    def test_push_all_targets_switch_by_lowest_trophy_sort(self, _get_state, _sleep, record_brawler, _save, _refresh):
         for target in (250, 500, 750, 1000, 1250, 1500):
             with self.subTest(target=target):
                 manager = self.make_manager(target)
@@ -98,6 +100,20 @@ class PushAllTargetSwitchTest(unittest.TestCase):
                 self.assertEqual(manager.Lobby_automation.lowest_calls, 1)
                 self.assertEqual(manager.Lobby_automation.named_calls, [])
                 self.assertIn("Q", manager.window_controller.pressed)
+                record_brawler.assert_any_call("second", 0)
+
+    @patch("stage_manager.record_brawler")
+    def test_sync_actual_selected_brawler_records_stats_when_name_already_matches(self, record_brawler):
+        manager = self.make_manager(500)
+        manager.brawlers_pick_data[0]["brawler"] = "first"
+        manager.brawlers_pick_data[0]["trophies"] = 480
+        manager.Trophy_observer = DummyTrophyObserver(485)
+        manager.Lobby_automation.last_selected_brawler = "first"
+
+        changed = manager.sync_actual_selected_brawler()
+
+        self.assertFalse(changed)
+        record_brawler.assert_called_once_with("first", 485)
 
     @patch.object(StageManager, "refresh_push_all_trophies_from_api", return_value=False)
     @patch("stage_manager.save_brawler_data")

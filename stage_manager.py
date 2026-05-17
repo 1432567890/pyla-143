@@ -310,6 +310,7 @@ class StageManager:
             return False
         current = str(self.brawlers_pick_data[0].get("brawler", "") or "").strip()
         if normalize_brawler_name(actual) == normalize_brawler_name(current):
+            self.record_current_brawler_stats()
             return False
         print(
             "actual_brawler_selection_sync",
@@ -323,6 +324,20 @@ class StageManager:
         )
         save_brawler_data(self.brawlers_pick_data)
         record_brawler(actual, self.brawlers_pick_data[0].get("trophies", None))
+        return True
+
+    def record_current_brawler_stats(self):
+        if not self.brawlers_pick_data:
+            return False
+        current = self.brawlers_pick_data[0]
+        brawler = str(current.get("brawler", "") or "").strip()
+        if not brawler:
+            return False
+        trophies = self._number_or_default(
+            getattr(self.Trophy_observer, "current_trophies", current.get("trophies", 0)),
+            current.get("trophies", 0),
+        )
+        record_brawler(brawler, trophies)
         return True
 
     def current_target_details(self, extra=None):
@@ -536,6 +551,7 @@ class StageManager:
         self.Trophy_observer.current_wins = self._number_or_default(next_data.get("wins", 0), 0)
         self.Trophy_observer.win_streak = self._number_or_default(next_data.get("win_streak", 0), 0)
         save_brawler_data(self.brawlers_pick_data)
+        self.record_current_brawler_stats()
         return True
 
     def refresh_push_all_trophies_from_api(self):
@@ -808,6 +824,7 @@ class StageManager:
         self.Trophy_observer.current_wins = next_data.get("wins", 0) if next_data.get("wins", "") != "" else 0
         self.Trophy_observer.win_streak = next_data.get("win_streak", 0)
         save_brawler_data(self.brawlers_pick_data)
+        self.record_current_brawler_stats()
         return True
 
     def read_lobby_trophies_from_screenshot(self, screenshot):
