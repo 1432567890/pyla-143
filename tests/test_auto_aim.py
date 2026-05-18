@@ -101,6 +101,48 @@ class AutoAimTests(unittest.TestCase):
         self.assertTrue(decision.should_fire)
         self.assertEqual(decision.target_bbox, (210, -20, 250, 20))
 
+    def test_self_iou_overlap_does_not_block_close_enemy(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[45, -20, 125, 60]],
+            walls=[],
+            attack_range=220,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            excluded_boxes=[{"box": [0, -30, 80, 70], "kind": "player"}],
+            friendly_iou_threshold=0.18,
+            friendly_center_distance_px=70,
+            close_tap_range=95,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.target_bbox, (45, -20, 125, 60))
+
+    def test_self_center_duplicate_still_blocks_player_box(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[0, -30, 80, 70]],
+            walls=[],
+            attack_range=220,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            excluded_boxes=[{"box": [0, -30, 80, 70], "kind": "player"}],
+            friendly_iou_threshold=0.18,
+            friendly_center_distance_px=70,
+        )
+
+        self.assertFalse(decision.should_fire)
+        self.assertEqual(decision.denied_by, "friendly_excluded")
+        self.assertIn("player_center", decision.los_status)
+
     def test_rejects_target_outside_attack_range(self):
         decision = choose_auto_aim(
             player_pos=(0, 0),

@@ -261,7 +261,7 @@ def _friendly_exclusion_reason(enemy_box, excluded_boxes, iou_threshold, center_
             continue
         iou = _box_iou(enemy_box, excluded_box)
         center_dist = math.hypot(_center(enemy_box)[0] - _center(excluded_box)[0], _center(enemy_box)[1] - _center(excluded_box)[1])
-        if iou >= float(iou_threshold or 0.0):
+        if kind != "player" and iou >= float(iou_threshold or 0.0):
             score = iou
             if score > best_score:
                 best_score = score

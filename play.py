@@ -340,7 +340,7 @@ class Movement:
             iou = self.box_iou(box, excluded_box)
             excluded_center = self.get_enemy_pos(excluded_box)
             center_dist = self.get_distance(center, excluded_center)
-            if iou >= getattr(self, "friendly_fire_iou_threshold", 0.18) and iou > best_score:
+            if kind != "player" and iou >= getattr(self, "friendly_fire_iou_threshold", 0.18) and iou > best_score:
                 best_score = iou
                 best_reason = f"{kind}_iou:{iou:.2f}"
             center_threshold = getattr(self, "friendly_fire_center_distance_px", 70)

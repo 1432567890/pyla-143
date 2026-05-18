@@ -297,6 +297,34 @@ class CombatAdaptationTests(unittest.TestCase):
         self.assertEqual(sanitized, [[60, -20, 100, 20]])
         self.assertEqual(excluded, [])
 
+    def test_self_iou_overlap_does_not_sanitize_close_enemy(self):
+        play = self.make_auto_aim_play(types.SimpleNamespace())
+        excluded_boxes = play.build_attack_excluded_boxes(
+            player_data=[0, -30, 80, 70],
+            teammate_data=[],
+        )
+        sanitized, excluded = play.sanitize_enemy_targets(
+            [[45, -20, 125, 60]],
+            excluded_boxes,
+        )
+
+        self.assertEqual(sanitized, [[45, -20, 125, 60]])
+        self.assertEqual(excluded, [])
+
+    def test_self_center_duplicate_is_still_sanitized(self):
+        play = self.make_auto_aim_play(types.SimpleNamespace())
+        excluded_boxes = play.build_attack_excluded_boxes(
+            player_data=[0, -30, 80, 70],
+            teammate_data=[],
+        )
+        sanitized, excluded = play.sanitize_enemy_targets(
+            [[0, -30, 80, 70]],
+            excluded_boxes,
+        )
+
+        self.assertEqual(sanitized, [])
+        self.assertEqual(excluded[0]["reason"], "player_center:0.0")
+
     def test_valid_in_range_shot_is_not_delayed_by_defensive_suppression(self):
         class AimWindow:
             def __init__(self):
