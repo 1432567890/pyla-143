@@ -14,7 +14,13 @@ import pyautogui
 from adbutils import adb
 from PIL import Image
 from customtkinter import CTkImage
-from brawler_selection import build_brawler_cards, filter_brawler_cards, selected_names_from_rows, trophy_sort_available
+from brawler_selection import (
+    build_brawler_cards,
+    filter_brawler_cards,
+    selected_names_from_rows,
+    trophy_sort_available,
+    upsert_selected_brawler_row,
+)
 from pyla_stats import load_stats
 from utils import (
     extract_text_strings,
@@ -1016,8 +1022,7 @@ class SelectBrawler:
                 "win_streak": current_win_streak_value
             }
 
-            self.brawlers_data = [item for item in self.brawlers_data if item["brawler"] != data["brawler"]]
-            self.brawlers_data.append(data)
+            self.brawlers_data = upsert_selected_brawler_row(self.brawlers_data, data)
 
             print("Selected Brawler Data :", self.brawlers_data)
             print(f"Brawler selector debug: selected_brawler={brawler} config_updated=pending_start")

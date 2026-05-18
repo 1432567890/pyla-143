@@ -121,3 +121,16 @@ def selected_names_from_rows(rows: Iterable[dict[str, Any]]) -> list[str]:
         if name:
             names.append(name)
     return names
+
+
+def upsert_selected_brawler_row(rows: Iterable[dict[str, Any]], selected_row: dict[str, Any]) -> list[dict[str, Any]]:
+    selected_brawler = str(selected_row.get("brawler", "")).strip()
+    selected_normalized = normalize_brawler_name(selected_brawler)
+    reordered = [
+        dict(row) for row in (rows or [])
+        if normalize_brawler_name(row.get("brawler", "")) != selected_normalized
+    ]
+    reordered.insert(0, dict(selected_row))
+    for index, row in enumerate(reordered):
+        row["automatically_pick"] = index != 0
+    return reordered
