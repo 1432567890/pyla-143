@@ -665,9 +665,26 @@ def choose_combat_intent(
             and target.distance is not None
             and target.distance <= float(panic_shot_range or 0.0)
         )
+        pressure_shot = bool(
+            mode == "hold_cover"
+            and target
+            and not target.stale
+            and target.line_of_sight
+            and target.in_attack_range
+            and tactical_plan.fire_window
+            and not frame.health.low
+            and not frame.fog_danger
+            and not frame.projectile_incoming
+            and not frame.wall_trap
+            and safety.safe
+        )
         if mode in {"survive", "disengage", "hold_cover"} and not panic:
-            attack_allowed = False
-            denied_reason = f"{mode}_blocks_attack"
+            if pressure_shot:
+                attack_allowed = True
+                denied_reason = "pressure_shot"
+            else:
+                attack_allowed = False
+                denied_reason = f"{mode}_blocks_attack"
         elif not tactical_plan.fire_window and not panic:
             attack_allowed = False
             denied_reason = "no_fire_window"

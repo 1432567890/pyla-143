@@ -64,6 +64,44 @@ class CombatBrainTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(reason, "panic_shot")
 
+    def test_hold_cover_allows_visible_in_range_pressure_shot(self):
+        target = type("Target", (), {
+            "bbox": (240, -20, 280, 20),
+            "center": (260, 0),
+            "distance": 260,
+            "score": 0.55,
+            "line_of_sight": True,
+            "in_attack_range": True,
+            "close_threat": False,
+            "stale": False,
+        })()
+        tactical_plan = type("Plan", (), {
+            "objective": "hold_cover",
+            "selected_angle": 0.0,
+            "fire_window": True,
+            "survival_score": 0.72,
+            "engagement_score": 0.55,
+            "kill_confirm_score": 0.0,
+            "reasons": ["fire_window"],
+        })()
+
+        intent = choose_combat_intent(
+            frame=CombatFrame(
+                player_pos=(0, 0),
+                enemy_data=[[240, -20, 280, 20]],
+                health=HealthState(ratio=0.85, confidence=1.0),
+                safe_range=180,
+                attack_range=520,
+            ),
+            target=target,
+            safety=SafetyResult(angle=0.0, safe=True, status="clear"),
+            tactical_plan=tactical_plan,
+            tactical_planner_enabled=True,
+        )
+
+        self.assertTrue(intent.attack_allowed)
+        self.assertEqual(intent.attack_denied_reason, "pressure_shot")
+
     def test_damage_super_uses_hypercharge_for_valuable_close_target(self):
         target = type("Target", (), {
             "stale": False,
