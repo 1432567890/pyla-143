@@ -50,6 +50,7 @@ def _merged_lobby_config():
 
 region_data = _merged_lobby_config()["template_matching"]
 super_debug = load_toml_as_dict("./cfg/general_config.toml").get('super_debug', 'no') == "yes"
+service_debug = str(load_toml_as_dict("./cfg/general_config.toml").get("service_debug", "no")).lower() in ("yes", "true", "1")
 _last_printed_state = None
 if super_debug:
     debug_folder = "./debug_frames/"
@@ -101,13 +102,14 @@ SHOWDOWN_PLACE_THRESHOLD = 0.95
 
 
 def refresh_runtime_config():
-    global region_data, super_debug, crop_region, _current_gamemode
+    global region_data, super_debug, service_debug, crop_region, _current_gamemode
     lobby_config = _merged_lobby_config()
     general_config = load_toml_as_dict("./cfg/general_config.toml")
     bot_config = load_toml_as_dict("./cfg/bot_config.toml")
     region_data = lobby_config["template_matching"]
     crop_region = lobby_config["lobby"]["trophy_observer"]
     super_debug = str(general_config.get("super_debug", "no")).lower() in ("yes", "true", "1")
+    service_debug = str(general_config.get("service_debug", "no")).lower() in ("yes", "true", "1")
     _current_gamemode = bot_config.get("gamemode", "")
     if super_debug and not os.path.exists("./debug_frames/"):
         os.makedirs("./debug_frames/")
@@ -1007,7 +1009,7 @@ def get_state(screenshot):
     screenshot_bgr = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
     if super_debug: cv2.imwrite(f"./debug_frames/state_screenshot_{len(os.listdir('./debug_frames'))}.png", screenshot_bgr)
     state = get_in_game_state(screenshot_bgr)
-    if super_debug or state != _last_printed_state:
+    if super_debug or (service_debug and state != _last_printed_state):
         print(f"State: {state}")
         _last_printed_state = state
     return state

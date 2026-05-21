@@ -185,6 +185,8 @@ def pyla_main(data):
     class Main:
 
         def __init__(self):
+            general_config = load_toml_as_dict("cfg/general_config.toml")
+            self.service_debug = config_bool(general_config.get("service_debug", "no"), False)
             self.window_controller = WindowController()
             self.Play = Play(*self.load_models(), self.window_controller)
             self.Time_management = TimeManagement()
@@ -194,9 +196,9 @@ def pyla_main(data):
             self.states_requiring_data = ["lobby"]
             self.initial_brawler_selection_failed = False
             if data[0]['automatically_pick']:
-                print("Picking brawler automatically")
+                self.service_log("Picking brawler automatically")
                 if not self.lobby_automator.select_brawler(data[0]['brawler']):
-                    print("Automatic brawler pick failed; pausing to avoid playing with a stale brawler profile.")
+                    self.service_log("Automatic brawler pick failed; pausing to avoid playing with a stale brawler profile.")
                     self.initial_brawler_selection_failed = True
                 else:
                     self.Stage_manager.sync_actual_selected_brawler()
@@ -215,7 +217,6 @@ def pyla_main(data):
             self.reward_chain_seen = False
             self.last_ignored_prestige_state_time = 0.0
             self.last_ignored_star_drop_state_time = 0.0
-            general_config = load_toml_as_dict("cfg/general_config.toml")
             self.max_ips = parse_max_ips(general_config.get('max_ips', 0))
             self.duplicate_frame_replay_enabled = config_bool(
                 general_config.get("duplicate_frame_replay_enabled", "yes"),
@@ -234,7 +235,7 @@ def pyla_main(data):
             )
             self.last_duplicate_frame_replay = 0.0
             self.perf_duplicate_frame_replays = 0
-            print(
+            self.service_log(
                 "Performance config:",
                 f"max_ips={self.max_ips if self.max_ips is not None else 'unlimited'}",
                 f"scrcpy_max_fps={general_config.get('scrcpy_max_fps', 'default')}",
@@ -357,6 +358,10 @@ def pyla_main(data):
             self.stop_requested = False
             self.pending_brawler_change = None
 
+        def service_log(self, *args, **kwargs):
+            if getattr(self, "service_debug", False):
+                print(*args, **kwargs)
+
         def send_runtime_notification(self, event_type, details=None):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -409,6 +414,7 @@ def pyla_main(data):
             report = reload_config_safe()
             general_config = load_toml_as_dict("cfg/general_config.toml")
             bot_config = load_toml_as_dict("cfg/bot_config.toml")
+            self.service_debug = config_bool(general_config.get("service_debug", self.service_debug), False)
             self.max_ips = parse_max_ips(general_config.get('max_ips', self.max_ips or 0))
             self.run_for_minutes = int(general_config.get('run_for_minutes', self.run_for_minutes))
             self.Stage_manager.post_match_action = str(bot_config.get("post_match_action", self.Stage_manager.post_match_action)).strip().lower()
@@ -453,7 +459,7 @@ def pyla_main(data):
                 record_brawler(brawler, next_row.get("trophies", 0))
                 apply_mode = "immediate"
                 self.send_runtime_notification("brawler_changed", {"brawler": brawler, "status": "changed"})
-            print(f"Telegram brawler change requested: {brawler} ({apply_mode})")
+            self.service_log(f"Telegram brawler change requested: {brawler} ({apply_mode})")
             return {"apply_mode": apply_mode}
 
         def apply_pending_brawler_change_if_safe(self):
@@ -468,7 +474,7 @@ def pyla_main(data):
             self.Stage_manager.Trophy_observer.change_trophies(next_row.get("trophies", 0))
             save_brawler_data(self.Stage_manager.brawlers_pick_data)
             record_brawler(next_row.get("brawler", ""), next_row.get("trophies", 0))
-            print(f"Applied pending Telegram brawler change: {next_row.get('brawler', '')}")
+            self.service_log(f"Applied pending Telegram brawler change: {next_row.get('brawler', '')}")
             self.send_runtime_notification("brawler_changed", {"brawler": next_row.get("brawler", ""), "status": "changed"})
             self.pending_brawler_change = None
 
@@ -486,7 +492,7 @@ def pyla_main(data):
             if not self.window_controller.restart_brawl_stars():
                 return False
             if not self.window_controller.restart_scrcpy_client():
-                print("Brawl Stars restarted, but scrcpy did not recover yet.")
+                self.service_log("Brawl Stars restarted, but scrcpy did not recover yet.")
                 self.handle_offline_emulator()
                 return False
             self.reset_visual_freeze_watchdog()
@@ -515,7 +521,7 @@ def pyla_main(data):
                     ))
                 finally:
                     loop.close()
-                print("Bot got stuck. User notified. Shutting down.")
+                self.service_log("Bot got stuck. User notified. Shutting down.")
                 self.window_controller.keys_up(list("wasd"))
                 self.window_controller.close()
                 import sys
@@ -559,7 +565,7 @@ def pyla_main(data):
             duplicate_replays = self.perf_duplicate_frame_replays
             self.perf_duplicate_waits = 0
             self.perf_duplicate_frame_replays = 0
-            print(
+            self.service_log(
                 "Low IPS detail:",
                 f"bot_ips={current_ips:.2f}",
                 f"feed_fps={self.perf_feed_fps:.2f}",
@@ -575,12 +581,12 @@ def pyla_main(data):
                     and self.perf_feed_fps < SLOW_FEED_FPS_THRESHOLD
                     and (self.perf_play_ema or 0) < SLOW_FEED_PLAY_AVG_LIMIT
             ):
-                print(
+                self.service_log(
                     "Diagnosis: emulator/scrcpy is only delivering a few usable frames. "
                     "This is not an AI/GPU compute limit; check emulator FPS/performance mode and local ADB."
                 )
             elif (self.perf_play_ema or 0) > 0.75:
-                print(
+                self.service_log(
                     "Diagnosis: vision/play loop is slow. Run python tools/performance_check.py "
                     "and make sure ONNX uses DmlExecutionProvider or CUDAExecutionProvider."
                 )
@@ -610,7 +616,7 @@ def pyla_main(data):
 
             self.low_feed_last_recovery = now
             self.slow_feed_recovery_attempts += 1
-            print(
+            self.service_log(
                 f"Frame feed stayed under 3 FPS for {now - self.low_feed_since:.1f}s "
                 f"(feed_fps={self.perf_feed_fps:.2f}); recovery attempt {self.slow_feed_recovery_attempts}."
             )
@@ -665,7 +671,7 @@ def pyla_main(data):
                 return False
             if current_ips >= self.low_ips_threshold:
                 if self.low_ips_since is not None:
-                    print(f"IPS recovered to {current_ips:.2f}; clearing low-IPS watchdog.")
+                    self.service_log(f"IPS recovered to {current_ips:.2f}; clearing low-IPS watchdog.")
                 self.reset_low_ips_watchdog(recovered=True)
                 return False
 
@@ -684,14 +690,14 @@ def pyla_main(data):
             self.last_low_ips_recovery = now
             self.low_ips_recovery_attempts += 1
             self.window_controller.keys_up(list("wasd"))
-            print(
+            self.service_log(
                 f"IPS stayed low ({current_ips:.2f}, frame age {frame_age:.1f}s) "
                 f"for {low_for:.1f}s; recovery attempt {self.low_ips_recovery_attempts}."
             )
 
             if self.low_ips_recovery_attempts >= self.low_ips_emulator_restart_after:
                 if frame_age <= 5:
-                    print(
+                    self.service_log(
                         "Low IPS is still happening but scrcpy frames are fresh; "
                         "skipping emulator restart and restarting Brawl Stars/scrcpy instead."
                     )
@@ -701,11 +707,11 @@ def pyla_main(data):
                         self.low_ips_emulator_restart_after - 1,
                     )
                 else:
-                    print("Low IPS did not recover after app/scrcpy restarts; restarting emulator profile.")
+                    self.service_log("Low IPS did not recover after app/scrcpy restarts; restarting emulator profile.")
                     if self.window_controller.restart_emulator_profile():
                         self.low_ips_recovery_attempts = 0
                     else:
-                        print("Emulator restart was not available; keeping bot alive and retrying scrcpy recovery.")
+                        self.service_log("Emulator restart was not available; keeping bot alive and retrying scrcpy recovery.")
                         if not self.window_controller.restart_scrcpy_client():
                             self.handle_offline_emulator()
                         self.low_ips_recovery_attempts = max(
@@ -713,10 +719,10 @@ def pyla_main(data):
                             self.low_ips_emulator_restart_after - 1,
                         )
             elif self.low_ips_recovery_attempts >= self.low_ips_app_restart_after:
-                print("Low IPS persisted; restarting Brawl Stars and scrcpy.")
+                self.service_log("Low IPS persisted; restarting Brawl Stars and scrcpy.")
                 self.restart_brawl_stars()
             else:
-                print("Low IPS detected; restarting scrcpy feed.")
+                self.service_log("Low IPS detected; restarting scrcpy feed.")
                 if not self.window_controller.restart_scrcpy_client():
                     self.handle_offline_emulator()
 
@@ -753,7 +759,7 @@ def pyla_main(data):
             if frozen_for < self.visual_freeze_restart_seconds:
                 return False
 
-            print(
+            self.service_log(
                 f"Match image did not change for {frozen_for:.1f}s "
                 f"(diff {diff:.3f}); restarting Brawl Stars and scrcpy."
             )
@@ -778,7 +784,7 @@ def pyla_main(data):
             if diff >= self.global_freeze_diff_threshold:
                 return False
 
-            print(
+            self.service_log(
                 "Screen health check found no visible change for "
                 f"{self.global_freeze_health_interval:.0f}s (diff {diff:.3f}); "
                 "restarting Brawl Stars and scrcpy."
@@ -799,7 +805,7 @@ def pyla_main(data):
             button_center = get_starr_nova_got_it_button_center(screenshot_bgr)
             if button_center is None:
                 return False
-            print("Starr Nova info screen detected; clicking GOT IT.")
+            self.service_log("Starr Nova info screen detected; clicking GOT IT.")
             self.window_controller.keys_up(list("wasd"))
             self.window_controller.click(*button_center, delay=0.08)
             return True
@@ -814,7 +820,7 @@ def pyla_main(data):
             back_center = get_starr_nova_hub_back_button_center(screenshot_bgr)
             if back_center is None:
                 return False
-            print("Starr Nova hub screen detected; clicking back.")
+            self.service_log("Starr Nova hub screen detected; clicking back.")
             self.window_controller.keys_up(list("wasd"))
             self.window_controller.click(*back_center, delay=0.08)
             self.lobby_entered_at = None
@@ -832,7 +838,7 @@ def pyla_main(data):
                 self.lobby_entered_at = now
 
             if now - self.last_lobby_start_press >= self.lobby_start_retry_interval:
-                print("Lobby watchdog: pressing start again.")
+                self.service_log("Lobby watchdog: pressing start again.")
                 self.window_controller.keys_up(list("wasd"))
                 self.window_controller.press_key("Q")
                 self.last_lobby_start_press = now
@@ -841,7 +847,7 @@ def pyla_main(data):
             if lobby_age < self.lobby_stuck_restart_seconds:
                 return False
 
-            print(f"Lobby did not enter a match for {lobby_age:.1f}s; restarting Brawl Stars.")
+            self.service_log(f"Lobby did not enter a match for {lobby_age:.1f}s; restarting Brawl Stars.")
             self.restart_brawl_stars()
             return True
 
@@ -886,7 +892,7 @@ def pyla_main(data):
                         self.lobby_after_match_confirm_seconds,
                 ):
                     if now - self.pending_lobby_notice >= 5.0:
-                        print(
+                        self.service_log(
                             "Ignoring lobby detection until it is stable after match "
                             f"({pending_for:.1f}/{self.lobby_after_match_confirm_seconds:.1f}s)."
                         )
@@ -896,11 +902,11 @@ def pyla_main(data):
 
             if detected_state in OUT_OF_MATCH_REWARD_STATES and state != detected_state:
                 if now - self.last_ignored_prestige_state_time >= 5.0:
-                    print(f"Ignoring {detected_state} detection until a match result or lobby is confirmed.")
+                    self.service_log(f"Ignoring {detected_state} detection until a match result or lobby is confirmed.")
                     self.last_ignored_prestige_state_time = now
             if detected_state in STAR_DROP_STATES and state != detected_state:
                 if now - self.last_ignored_star_drop_state_time >= 5.0:
-                    print("Ignoring star_drop detection because no post-match reward chain is active.")
+                    self.service_log("Ignoring star_drop detection because no post-match reward chain is active.")
                     self.last_ignored_star_drop_state_time = now
 
             if state == "match":
@@ -982,7 +988,7 @@ def pyla_main(data):
             try:
                 text = " ".join(extract_text_strings(center_crop))
             except Exception as e:
-                print(f"Could not OCR disconnect screen: {e}")
+                self.service_log(f"Could not OCR disconnect screen: {e}")
                 return False
 
             lowered_text = text.lower()
@@ -1001,9 +1007,9 @@ def pyla_main(data):
 
             self.disconnect_reload_attempts += 1
             self.window_controller.keys_up(list("wasd"))
-            print(f"Disconnect/login screen detected, recovery attempt {self.disconnect_reload_attempts}.")
+            self.service_log(f"Disconnect/login screen detected, recovery attempt {self.disconnect_reload_attempts}.")
             if self.disconnect_reload_attempts >= 3:
-                print("Retry did not clear disconnect screen; restarting Brawl Stars.")
+                self.service_log("Retry did not clear disconnect screen; restarting Brawl Stars.")
                 self.restart_brawl_stars()
                 self.disconnect_reload_attempts = 0
             else:
@@ -1021,11 +1027,11 @@ def pyla_main(data):
                         - (now - self.window_controller.last_emulator_restart_time),
                     )
                     if remaining > 0:
-                        print(f"Emulator ADB is offline; waiting {remaining:.0f}s before the next profile restart attempt.")
+                        self.service_log(f"Emulator ADB is offline; waiting {remaining:.0f}s before the next profile restart attempt.")
                     else:
-                        print("Emulator ADB is offline; trying to restart the saved emulator profile.")
+                        self.service_log("Emulator ADB is offline; trying to restart the saved emulator profile.")
                 else:
-                    print("Emulator ADB is offline and auto-restart is disabled; waiting for the emulator to come back online.")
+                    self.service_log("Emulator ADB is offline and auto-restart is disabled; waiting for the emulator to come back online.")
                 self.last_offline_emulator_message = now
 
             if self.window_controller.emulator_autorestart:
@@ -1058,7 +1064,7 @@ def pyla_main(data):
             if now - self.last_stale_feed_recovery < 5:
                 if now - self.last_stale_feed_message > 2:
                     remaining = 5 - (now - self.last_stale_feed_recovery)
-                    print(f"Scrcpy frame is still {age_text}; retrying recovery in {remaining:.1f}s.")
+                    self.service_log(f"Scrcpy frame is still {age_text}; retrying recovery in {remaining:.1f}s.")
                     self.last_stale_feed_message = now
                 return
 
@@ -1066,11 +1072,11 @@ def pyla_main(data):
             self.stale_feed_recovery_attempts += 1
 
             if self.stale_feed_recovery_attempts >= 2 or stale_age > 30:
-                print("Scrcpy feed is still frozen; restarting Brawl Stars and scrcpy.")
+                self.service_log("Scrcpy feed is still frozen; restarting Brawl Stars and scrcpy.")
                 if self.restart_brawl_stars():
                     self.stale_feed_recovery_attempts = 0
             else:
-                print(f"Scrcpy frame is {age_text}; restarting scrcpy feed.")
+                self.service_log(f"Scrcpy frame is {age_text}; restarting scrcpy feed.")
                 if not self.window_controller.restart_scrcpy_client():
                     self.handle_offline_emulator()
 
@@ -1081,11 +1087,11 @@ def pyla_main(data):
                 write_state(self.control_window.state_path, RUNNING)
                 return False
             if control_state == CHANGE_BRAWLER_REQUESTED:
-                print("Change brawler requested from pause menu; use Telegram /brawler or restart selector to choose a brawler.")
+                self.service_log("Change brawler requested from pause menu; use Telegram /brawler or restart selector to choose a brawler.")
                 write_state(self.control_window.state_path, RUNNING)
                 return False
             if control_state == OPEN_STATS_REQUESTED:
-                print("Open stats requested from pause menu:", load_stats())
+                self.service_log("Open stats requested from pause menu:", load_stats())
                 write_state(self.control_window.state_path, RUNNING)
                 return False
             if self.control_window.is_stopped():
@@ -1102,7 +1108,7 @@ def pyla_main(data):
                     self.last_processed_frame_id = -1
                     self.was_paused = False
                     self.pause_started_at = None
-                    print("Bot resumed.")
+                    self.service_log("Bot resumed.")
                 return False
 
             if not self.was_paused:
@@ -1110,7 +1116,7 @@ def pyla_main(data):
                 self.Play.reset_match_control_state()
                 self.was_paused = True
                 self.pause_started_at = time.time()
-                print("Bot paused.")
+                self.service_log("Bot paused.")
             time.sleep(0.1)
             return True
 
@@ -1145,7 +1151,7 @@ def pyla_main(data):
 
             self.last_movement_inactivity_pause_reset = now
             self.last_movement_activity_at = now
-            print(
+            self.service_log(
                 "[MOVE] movement_inactivity_pause_reset "
                 f"inactive_for_ms={int(threshold * 1000)} "
                 f"are_we_moving={getattr(self.window_controller, 'are_we_moving', False)} "
@@ -1167,7 +1173,7 @@ def pyla_main(data):
             c = 0
             while True:
                 if self.stop_requested:
-                    print("Stop requested; exiting main loop safely.")
+                    self.service_log("Stop requested; exiting main loop safely.")
                     break
                 if self.handle_pause_control():
                     s_time = time.time()
@@ -1216,7 +1222,7 @@ def pyla_main(data):
                     )
                 except ConnectionError as e:
                     if self.window_controller.is_emulator_online():
-                        print(f"{e} Recovering scrcpy feed.")
+                        self.service_log(f"{e} Recovering scrcpy feed.")
                     self.handle_stale_scrcpy_feed()
                     continue
 
@@ -1304,7 +1310,8 @@ def run_app():
         check_version()
         update_wall_model_classes()
         if not current_wall_model_is_latest():
-            print("New Wall detection model found, downloading... (this might take a few minutes depending on your internet speed)")
+            if config_bool(load_toml_as_dict("cfg/general_config.toml").get("service_debug", "no"), False):
+                print("New Wall detection model found, downloading... (this might take a few minutes depending on your internet speed)")
             get_latest_wall_model_file()
 
     app = App(login, SelectBrawler, pyla_main, all_brawlers, Hub)

@@ -35,8 +35,16 @@ SAFE_KEYS = {
         "movement_input_mode",
         "showdown_playstyle_mode",
         "post_match_action",
+        "attack_decision_debug",
         "auto_aim_debug",
+        "movement_intent_debug",
+        "combat_brain_debug",
+        "ability_brain_debug",
+        "combat_snapshot_enabled",
         "joystick_debug",
+    },
+    "cfg/general_config.toml": {
+        "service_debug",
     },
 }
 

@@ -9,7 +9,7 @@ from collections import deque
 import cv2
 import numpy as np
 from state_finder import get_state
-from auto_aim import choose_auto_aim, detect_aim_line_angle
+from auto_aim import choose_auto_aim, detect_aim_line_angle, friendly_lane_block_reason
 from combat_brain import (
     CombatFrame,
     HealthState,
@@ -44,10 +44,16 @@ from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info
 brawl_stars_width, brawl_stars_height = 1920, 1080
 debug = load_toml_as_dict("cfg/general_config.toml").get('super_debug', 'no') == "yes"
 visual_debug = load_toml_as_dict("cfg/general_config.toml").get('visual_debug', 'no') == "yes"
+service_debug = str(load_toml_as_dict("cfg/general_config.toml").get("service_debug", "no")).lower() in ("yes", "true", "1")
 
 def vlog(*args):
     if visual_debug:
         print("[DBG]", *args)
+
+
+def slog(*args):
+    if str(load_toml_as_dict("cfg/general_config.toml").get("service_debug", "no")).lower() in ("yes", "true", "1"):
+        print(*args)
 DEFAULT_PIXEL_COUNTER_CROP_AREA = {
     "super": [1460, 830, 1560, 930],
     "gadget": [1580, 930, 1700, 1050],
@@ -167,8 +173,8 @@ class Movement:
         self.auto_aim_close_tap_range = float(bot_config.get("auto_aim_close_tap_range", 0))
         self.auto_aim_close_los_override_range = float(bot_config.get("auto_aim_close_los_override_range", 0))
         self.close_range_attack_override = str(bot_config.get("close_range_attack_override", "true")).lower() in ("yes", "true", "1")
-        self.attack_decision_debug = str(bot_config.get("attack_decision_debug", bot_config.get("auto_aim_debug", "yes"))).lower() in ("yes", "true", "1")
-        self.auto_aim_debug = str(bot_config.get("auto_aim_debug", "yes")).lower() in ("yes", "true", "1")
+        self.attack_decision_debug = str(bot_config.get("attack_decision_debug", bot_config.get("auto_aim_debug", "no"))).lower() in ("yes", "true", "1")
+        self.auto_aim_debug = str(bot_config.get("auto_aim_debug", "no")).lower() in ("yes", "true", "1")
         self.enable_flicker_retreat = str(bot_config.get("enable_flicker_retreat", "true")).lower() in ("yes", "true", "1")
         self.enable_combat_mans = str(bot_config.get("enable_combat_mans", "true")).lower() in ("yes", "true", "1")
         self.mans_threat_threshold = float(bot_config.get("mans_threat_threshold", 0.42))
@@ -216,12 +222,12 @@ class Movement:
         self.movement_intent_max_hold_ms = float(bot_config.get("movement_intent_max_hold_ms", 650))
         self.movement_intent_switch_score_threshold = float(bot_config.get("movement_intent_switch_score_threshold", 0.18))
         self.movement_intent_angle_smoothing = float(bot_config.get("movement_intent_angle_smoothing", 0.35))
-        self.movement_intent_debug = str(bot_config.get("movement_intent_debug", "yes")).lower() in ("yes", "true", "1")
+        self.movement_intent_debug = str(bot_config.get("movement_intent_debug", "no")).lower() in ("yes", "true", "1")
         self._movement_intent_memory = MovementIntentMemory()
         self.combat_brain_enabled = str(bot_config.get("combat_brain_enabled", "true")).lower() in ("yes", "true", "1")
-        self.combat_brain_debug = str(bot_config.get("combat_brain_debug", "yes")).lower() in ("yes", "true", "1")
+        self.combat_brain_debug = str(bot_config.get("combat_brain_debug", "no")).lower() in ("yes", "true", "1")
         self.ability_brain_enabled = str(bot_config.get("ability_brain_enabled", "true")).lower() in ("yes", "true", "1")
-        self.ability_brain_debug = str(bot_config.get("ability_brain_debug", "yes")).lower() in ("yes", "true", "1")
+        self.ability_brain_debug = str(bot_config.get("ability_brain_debug", "no")).lower() in ("yes", "true", "1")
         self.defensive_attack_gate_enabled = str(bot_config.get("defensive_attack_gate_enabled", "true")).lower() in ("yes", "true", "1")
         self.panic_shot_range = float(bot_config.get("panic_shot_range", 150))
         self.panic_super_range = float(bot_config.get("panic_super_range", 180))
@@ -246,6 +252,10 @@ class Movement:
         self.friendly_fire_guard_enabled = str(bot_config.get("friendly_fire_guard_enabled", "true")).lower() in ("yes", "true", "1")
         self.friendly_fire_iou_threshold = float(bot_config.get("friendly_fire_iou_threshold", 0.18))
         self.friendly_fire_center_distance_px = float(bot_config.get("friendly_fire_center_distance_px", 70))
+        self.friendly_fire_lane_guard_enabled = str(bot_config.get("friendly_fire_lane_guard_enabled", "true")).lower() in ("yes", "true", "1")
+        self.friendly_fire_lane_padding_ratio = float(bot_config.get("friendly_fire_lane_padding_ratio", 0.25))
+        self.friendly_fire_lane_min_padding = float(bot_config.get("friendly_fire_lane_min_padding", 8))
+        self.friendly_fire_lane_max_padding = float(bot_config.get("friendly_fire_lane_max_padding", 28))
         self.close_attack_requires_clear_hit_point = str(bot_config.get("close_attack_requires_clear_hit_point", "true")).lower() in ("yes", "true", "1")
         self.attack_wall_guard_enabled = str(bot_config.get("attack_wall_guard_enabled", "true")).lower() in ("yes", "true", "1")
         self._last_ability_plan_log = 0.0
@@ -258,7 +268,7 @@ class Movement:
             "last_objective": None,
             "last_objective_time": 0.0,
         }
-        self.combat_snapshot_enabled = str(bot_config.get("combat_snapshot_enabled", "true")).lower() in ("yes", "true", "1")
+        self.combat_snapshot_enabled = str(bot_config.get("combat_snapshot_enabled", "false")).lower() in ("yes", "true", "1")
         self.combat_snapshot_dir = str(bot_config.get("combat_snapshot_dir", "debug_frames/combat"))
         self.combat_snapshot_seconds = float(bot_config.get("combat_snapshot_seconds", 8))
         self._combat_decision_history = deque(maxlen=max(30, int(self.combat_snapshot_seconds * 30)))
@@ -354,6 +364,17 @@ class Movement:
                     best_score = score
                     best_reason = f"{kind}_center:{center_dist:.1f}"
         return best_reason
+
+    def friendly_lane_reason(self, player_pos, aim_point, excluded_boxes):
+        return friendly_lane_block_reason(
+            player_pos,
+            aim_point,
+            excluded_boxes or [],
+            enabled=getattr(self, "friendly_fire_lane_guard_enabled", True),
+            padding_ratio=getattr(self, "friendly_fire_lane_padding_ratio", 0.25),
+            min_padding=getattr(self, "friendly_fire_lane_min_padding", 8.0),
+            max_padding=getattr(self, "friendly_fire_lane_max_padding", 28.0),
+        )
 
     def build_attack_excluded_boxes(self, player_data=None, teammate_data=None):
         boxes = []
@@ -472,6 +493,10 @@ class Movement:
             friendly_center_distance_px=getattr(self, "friendly_fire_center_distance_px", 70),
             close_attack_requires_clear_hit_point=getattr(self, "close_attack_requires_clear_hit_point", True),
             attack_wall_guard_enabled=getattr(self, "attack_wall_guard_enabled", True),
+            friendly_lane_guard_enabled=getattr(self, "friendly_fire_lane_guard_enabled", True),
+            friendly_lane_padding_ratio=getattr(self, "friendly_fire_lane_padding_ratio", 0.25),
+            friendly_lane_min_padding=getattr(self, "friendly_fire_lane_min_padding", 8.0),
+            friendly_lane_max_padding=getattr(self, "friendly_fire_lane_max_padding", 28.0),
         )
 
     def is_attack_spam_active(self, brawler, decision):
@@ -515,6 +540,7 @@ class Movement:
         predicted_s = tuple(map(int, decision.predicted)) if decision.predicted else None
         angle_s = None if decision.aim_angle is None else round(decision.aim_angle, 1)
         dist_s = None if decision.distance is None else int(decision.distance)
+        range_s = None if getattr(decision, "range_distance", None) is None else int(decision.range_distance)
         closest_s = None if decision.closest_enemy_distance is None else int(decision.closest_enemy_distance)
         cooldown_s = self.attack_cooldown if effective_cooldown is None else effective_cooldown
         duration_s = getattr(self, "aim_attack_duration", 0.04) if aim_duration is None else aim_duration
@@ -531,8 +557,8 @@ class Movement:
             f"attack_denied_reason={reason if (denied_by or not decision.should_fire) else 'none'} "
             f"visible_enemy_count={decision.visible_enemy_count} "
             f"target={target_s} target_bbox={decision.target_bbox} selected_target={target_s} "
-            f"closest_enemy_distance={closest_s} selected_distance={dist_s} attack_range={int(attack_range)} "
-            f"in_range={decision.in_range} line_of_sight={decision.los_status} "
+            f"closest_enemy_distance={closest_s} selected_distance={dist_s} range_distance={range_s} attack_range={int(attack_range)} "
+            f"in_range={decision.in_range} line_of_sight={decision.los_status} friendly_lane={decision.friendly_lane_status or 'clear'} "
             f"confidence={decision.confidence:.2f} confidence_threshold={decision.threshold:.2f} "
             f"close_threat={decision.close_threat} close_range_override={decision.close_range_override} "
             f"attack_spam_active={attack_spam_active} effective_cooldown_ms={int(max(0.0, cooldown_s) * 1000)} "
@@ -676,6 +702,7 @@ class Movement:
             recent_damage=bool(flicker_active and flicker_confidence >= 0.50),
             heal_active=bool(heal_active),
             source=source,
+            low_threshold=getattr(self, "heal_low_health_threshold", 0.42),
         )
 
     def choose_combat_target_score(self, player_pos, enemy_data, walls, brawler, safe_range, attack_range, attack_decision=None):
@@ -852,11 +879,18 @@ class Movement:
             )
         elif getattr(self, "friendly_fire_guard_enabled", True) and decision.target_bbox:
             reason = self.friendly_overlap_reason(decision.target_bbox, excluded_boxes or [])
+            denied_by = "friendly_excluded"
+            if not reason:
+                aim_point = decision.predicted or decision.target
+                reason = self.friendly_lane_reason(player_pos, aim_point, excluded_boxes or [])
+                denied_by = "friendly_lane_blocked"
             if reason:
                 decision.should_fire = False
-                decision.denied_by = "friendly_excluded"
-                decision.reason = "friendly_excluded"
+                decision.denied_by = denied_by
+                decision.reason = denied_by
                 decision.los_status = reason
+                if denied_by == "friendly_lane_blocked":
+                    decision.friendly_lane_status = reason
         input_mode = "tap" if decision.use_tap else "aimed_drag"
         if not getattr(self, "aimed_attacks_enabled", False) or not hasattr(self.window_controller, "aim_attack_angle"):
             input_mode = "tap_fallback"
@@ -919,7 +953,7 @@ class Movement:
         return True
 
     def use_hypercharge(self):
-        print("Using hypercharge")
+        slog("Using hypercharge")
         self.window_controller.press_key("H", delay=0.035)
         return True
 
@@ -929,7 +963,7 @@ class Movement:
             if current_time - self.last_gadget_time < self.gadget_cooldown:
                 return False
             self.last_gadget_time = current_time
-        print("Using gadget")
+        slog("Using gadget")
         self.window_controller.press_key("G", delay=0.035)
         return True
 
@@ -940,7 +974,7 @@ class Movement:
             if current_time - self.last_super_time < effective_cooldown:
                 return False
             self.last_super_time = current_time
-        print("Using super")
+        slog("Using super")
         self.window_controller.press_key("E", delay=0.035)
         return True
 
@@ -1288,9 +1322,10 @@ class Play(Movement):
         self.super_crop_area = crop_area["super"]
         self.gadget_crop_area = crop_area["gadget"]
         self.hypercharge_crop_area = crop_area["hypercharge"]
-        global debug, visual_debug
+        global debug, visual_debug, service_debug
         debug = str(general_config.get("super_debug", "no")).lower() in ("yes", "true", "1")
         visual_debug = str(general_config.get("visual_debug", "no")).lower() in ("yes", "true", "1")
+        service_debug = str(general_config.get("service_debug", "no")).lower() in ("yes", "true", "1")
         self.visual_debug_scale = max(0.25, min(1.0, float(general_config.get("visual_debug_scale", 0.6))))
         self.visual_debug_max_fps = max(1.0, float(general_config.get("visual_debug_max_fps", 30)))
         self.visual_debug_max_boxes = max(20, int(general_config.get("visual_debug_max_boxes", 120)))
@@ -1349,7 +1384,7 @@ class Play(Movement):
         safe_name = os.path.basename(self.playstyle_name)
         path = os.path.join("playstyles", safe_name)
         if not os.path.exists(path):
-            print(f"Playstyle '{safe_name}' was not found. Falling back to built-in logic.")
+            slog(f"Playstyle '{safe_name}' was not found. Falling back to built-in logic.")
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -1361,7 +1396,7 @@ class Play(Movement):
                     self.playstyle_meta = {}
                     source = first_line + "\n" + f.read()
             self.playstyle_code = compile(source, path, "exec")
-            print(f"Loaded playstyle: {safe_name}")
+            slog(f"Loaded playstyle: {safe_name}")
         except Exception as e:
             print(f"Could not load playstyle '{safe_name}': {e}. Falling back to built-in logic.")
             self.playstyle_code = None
@@ -1373,6 +1408,8 @@ class Play(Movement):
         persistent_data = {
             "time_since_holding_attack": self.time_since_holding_attack,
         }
+        playstyle_teammate_data = getattr(self, "last_playstyle_teammate_data", None) or []
+        attack_excluded_boxes = self.build_attack_excluded_boxes(player_data, playstyle_teammate_data)
 
         def use_hypercharge_wrapper():
             if self.use_hypercharge():
@@ -1411,7 +1448,7 @@ class Play(Movement):
             "brawlers_info": self.brawlers_info,
             "player_data": player_data,
             "enemy_data": enemy_data,
-            "teammate_data": getattr(self, "last_playstyle_teammate_data", None),
+            "teammate_data": playstyle_teammate_data,
             "walls": walls,
             "game_mode": self.game_mode,
             "persistent_data": persistent_data,
@@ -1427,6 +1464,7 @@ class Play(Movement):
                 enemy_data,
                 walls,
                 attack_range=attack_range,
+                excluded_boxes=attack_excluded_boxes,
             ),
             "should_attack_enemy": lambda attack_range=None: self.choose_attack_decision(
                 brawler,
@@ -1435,6 +1473,7 @@ class Play(Movement):
                 walls,
                 attack_range=attack_range,
                 current_time=time.time(),
+                excluded_boxes=attack_excluded_boxes,
             ).should_fire,
             "use_hypercharge": use_hypercharge_wrapper,
             "use_gadget": use_gadget_wrapper,
@@ -1521,7 +1560,7 @@ class Play(Movement):
 
         self._bad_vision_last_capture[reason] = now
         self._bad_vision_capture_count += 1
-        print(f"Captured vision frame: {image_path}")
+        slog(f"Captured vision frame: {image_path}")
 
     def reset_match_control_state(self):
         self.window_controller.keys_up(list("wasd"))
@@ -1601,7 +1640,7 @@ class Play(Movement):
             for move in alternative_moves:
                 if not self.is_path_blocked(player_position, move, walls):
                     return move
-            print("no movement possible ?")
+            slog("no movement possible ?")
             # If no movement is possible, return empty string
             return preferred_movement
 
@@ -2578,6 +2617,7 @@ class Play(Movement):
             teammate_near_range=getattr(self, "teammate_combat_regroup_distance", 650),
             wall_pressure=self.is_path_blocked_angle(player_pos, base_angle, walls),
             attack_lane_available=attack_lane_available,
+            low_health_threshold=getattr(self, "heal_low_health_threshold", 0.42),
         )
         self._intentlog(
             "THREAT_MODEL",
@@ -2607,6 +2647,7 @@ class Play(Movement):
             fog_escape_angle=fog_flee_angle,
             teammate_angle=teammate_angle,
             heal_retreat_angle=heal_angle,
+            heal_attack_range=getattr(self, "heal_attack_only_close_range", max(120.0, attack_range * 0.30)),
         )
 
         safe_angle = self.find_best_angle(player_pos, raw_intent.angle, walls)
@@ -3419,6 +3460,12 @@ class Play(Movement):
             teammate_angle = self.angle_from_direction(closest_teammate[0] - player_pos[0], closest_teammate[1] - player_pos[1])
         base_intent_mode = movement_intent.mode if movement_intent is not None else None
         profile = self.get_combat_profile(brawler)
+        panic_range = float(profile.get("panic_shot_range", getattr(self, "panic_shot_range", 150)))
+        if health_state.low:
+            panic_range = min(
+                panic_range,
+                float(getattr(self, "heal_attack_only_close_range", panic_range)),
+            )
         preferred_distance = float(profile.get(
             "preferred_distance_px",
             safe_range * float(profile.get("preferred_distance_multiplier", 1.0)),
@@ -3459,7 +3506,7 @@ class Play(Movement):
             target=target_score,
             safety=safety_result,
             defensive_gate_enabled=bool(combat_brain_active and getattr(self, "defensive_attack_gate_enabled", True)),
-            panic_shot_range=float(self.get_combat_profile(brawler).get("panic_shot_range", getattr(self, "panic_shot_range", 150))),
+            panic_shot_range=panic_range,
             tactical_planner_enabled=bool(combat_brain_active and getattr(self, "tactical_planner_enabled", False)),
             angle_samples=getattr(self, "tactical_angle_samples", 16),
             is_angle_blocked=lambda candidate: self.is_path_blocked_angle(player_pos, candidate, walls),
@@ -3609,7 +3656,7 @@ class Play(Movement):
                 target=target_score,
                 health=health_state,
                 defensive_gate_enabled=bool(combat_brain_active and getattr(self, "defensive_attack_gate_enabled", True)),
-                panic_shot_range=float(self.get_combat_profile(brawler).get("panic_shot_range", getattr(self, "panic_shot_range", 150))),
+                panic_shot_range=panic_range,
                 suppress_active=suppress_active,
             )
             if combat_brain_active and combat_intent.attack_denied_reason and not combat_intent.attack_allowed:
@@ -4057,7 +4104,7 @@ class Play(Movement):
                     return
                 except Exception as exc:
                     self._movement_fallback_to_wasd = True
-                    print(f"[MOVE] fallback_to_wasd reason={exc}")
+                    slog(f"[MOVE] fallback_to_wasd reason={exc}")
                     movement = [
                         "d", "sd", "s", "sa", "a", "wa", "w", "wd"
                     ][int((float(movement) % 360 + 22.5) / 45) % 8]
@@ -4082,7 +4129,7 @@ class Play(Movement):
                 return
             except Exception as exc:
                 self._movement_fallback_to_wasd = True
-                print(f"[MOVE] fallback_to_wasd reason={exc}")
+                slog(f"[MOVE] fallback_to_wasd reason={exc}")
         # Legacy WASD path
         keys_to_keyDown = []
         keys_to_keyUp = []
@@ -4148,7 +4195,13 @@ class Play(Movement):
                 # Debounce small angle jitter before sending to joystick.
                 movement = self._debounce_angle(movement)
         else:
-            movement = self.get_movement(player_data=data['player'][0], enemy_data=data['enemy'], walls=data['wall'], brawler=brawler)
+            movement = self.get_movement(
+                player_data=data['player'][0],
+                enemy_data=data['enemy'],
+                walls=data['wall'],
+                brawler=brawler,
+                teammate_data=data.get('teammate'),
+            )
 
         movement = self.enemy_pressure_movement_fallback(movement, data, brawler, current_time)
 
@@ -4187,7 +4240,7 @@ class Play(Movement):
             last_warn = getattr(self.window_controller, "_last_movement_stall_warning", 0.0)
             if last_cmd and age > warning_after and time.time() - last_warn > 1.0:
                 self.window_controller._last_movement_stall_warning = time.time()
-                print(
+                slog(
                     "[MOVE] movement_stall_detected "
                     f"last_movement_command_age_ms={int(age * 1000)} "
                     f"active_movement_intent={bool(movement)} "
@@ -4660,10 +4713,12 @@ class Play(Movement):
         stable_history = self.merge_wall_boxes(historical_walls, min_hits=max(1, self.wall_history_min_hits))
         return self.merge_wall_boxes(current_walls + stable_history)
 
-    def get_movement(self, player_data, enemy_data, walls, brawler):
+    def get_movement(self, player_data, enemy_data, walls, brawler, teammate_data=None):
         brawler_info = self.brawlers_info.get(brawler)
         if not brawler_info:
             raise ValueError(f"Brawler '{brawler}' not found in brawlers info.")
+        if teammate_data is not None:
+            self.last_playstyle_teammate_data = teammate_data
         playstyle_movement = self.run_playstyle(player_data, enemy_data, walls, brawler)
         if playstyle_movement is not None:
             return playstyle_movement
@@ -4675,6 +4730,10 @@ class Play(Movement):
 
         safe_range, attack_range, super_range = self.get_brawler_range(brawler)
         player_pos = self.get_player_pos(player_data)
+        attack_excluded_boxes = self.build_attack_excluded_boxes(player_data, teammate_data)
+        enemy_data, friendly_excluded_targets = self.sanitize_enemy_targets(enemy_data, attack_excluded_boxes)
+        if friendly_excluded_targets and getattr(self, "attack_decision_debug", False):
+            self._aimlog(f"friendly_fire_guard excluded={friendly_excluded_targets}")
         if debug: print("found player pos:", player_pos)
         if not self.is_there_enemy(enemy_data):
             return self.no_enemy_movement(player_data, walls)
@@ -4707,7 +4766,7 @@ class Play(Movement):
                 movement = move
                 break
         else:
-            print("default paths are blocked")
+            slog("default paths are blocked")
             # If all preferred directions are blocked, try other directions
             alternative_moves = ['W', 'A', 'S', 'D']
             random.shuffle(alternative_moves)
@@ -4739,6 +4798,7 @@ class Play(Movement):
             walls,
             attack_range=attack_range,
             current_time=current_time,
+            excluded_boxes=attack_excluded_boxes,
         )
         if attack_decision.should_fire:
             if self.strafe_enabled:
@@ -4764,6 +4824,7 @@ class Play(Movement):
                     walls,
                     attack_range=attack_range,
                     decision=attack_decision,
+                    excluded_boxes=attack_excluded_boxes,
                 )
             else:
                 if self.time_since_holding_attack is None:
@@ -4820,14 +4881,6 @@ class Play(Movement):
                     brawler,
                     {"state": getattr(main, "state", None)},
                 )
-                self.save_combat_snapshot(
-                    "player_lost",
-                    extra={
-                        "raw_detection_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else None,
-                        "state": getattr(main, "state", None),
-                    },
-                    brawler=brawler,
-                )
                 self.window_controller.keys_up(list("wasd"))
             self.time_since_different_movement = time.time()
             if current_time - self.time_since_last_proceeding > self.no_detection_proceed_delay:
@@ -4837,7 +4890,7 @@ class Play(Movement):
                     self.time_since_last_proceeding = current_time
                 else:
                     if current_time - self.time_since_last_no_detection_q >= self.no_detection_q_press_interval:
-                        print("No detection fallback: pressing Q.")
+                        slog("No detection fallback: pressing Q.")
                         self.window_controller.press_key("Q")
                         self.time_since_last_no_detection_q = current_time
                     self.time_since_last_proceeding = time.time()

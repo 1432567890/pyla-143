@@ -15,6 +15,39 @@ from combat_brain import (
 
 
 class CombatBrainTests(unittest.TestCase):
+    def test_health_state_uses_configurable_low_threshold(self):
+        self.assertTrue(HealthState(ratio=0.50, confidence=1.0, low_threshold=0.55).low)
+        self.assertFalse(HealthState(ratio=0.50, confidence=1.0, low_threshold=0.45).low)
+
+    def test_configured_low_health_selects_retreat_heal(self):
+        target = type("Target", (), {
+            "bbox": (240, -20, 280, 20),
+            "center": (260, 0),
+            "distance": 260,
+            "score": 0.55,
+            "line_of_sight": True,
+            "in_attack_range": True,
+            "close_threat": False,
+            "stale": False,
+        })()
+
+        intent = choose_combat_intent(
+            frame=CombatFrame(
+                player_pos=(0, 0),
+                enemy_data=[[240, -20, 280, 20]],
+                health=HealthState(ratio=0.50, confidence=1.0, low_threshold=0.55),
+                desired_angle=180,
+                safe_range=180,
+                attack_range=520,
+            ),
+            target=target,
+            safety=SafetyResult(angle=180, safe=True, status="clear"),
+        )
+
+        self.assertEqual(intent.mode, "retreat_heal")
+        self.assertFalse(intent.attack_allowed)
+        self.assertEqual(intent.attack_denied_reason, "retreat_heal")
+
     def test_target_selection_prefers_close_threat_over_far_target(self):
         target = choose_target(
             player_pos=(0, 0),

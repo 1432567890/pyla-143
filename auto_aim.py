@@ -26,6 +26,8 @@ class AttackDecision:
     visible_enemy_count: int = 0
     closest_enemy_distance: float = None
     aim_fallback_reason: str = ""
+    range_distance: float = None
+    friendly_lane_status: str = ""
 
 
 AutoAimDecision = AttackDecision
@@ -162,11 +164,21 @@ def _dedupe_points(points):
     return result
 
 
-def _clear_hit_point(player_pos, target_box, walls, can_ignore_walls, walls_block_line_of_sight, max_distance=None):
+def _clear_hit_point(
+    player_pos,
+    target_box,
+    walls,
+    can_ignore_walls,
+    walls_block_line_of_sight,
+    max_distance=None,
+    point_clear=None,
+):
     points = _dedupe_points([_closest_point_on_box(player_pos, target_box)] + _bbox_hit_points(target_box))
     candidates = []
     for index, point in enumerate(points):
         if _line_of_sight_clear(player_pos, point, walls, can_ignore_walls, walls_block_line_of_sight):
+            if point_clear is not None and point_clear(point):
+                continue
             distance = math.hypot(point[0] - player_pos[0], point[1] - player_pos[1])
             in_window = max_distance is None or distance <= max_distance
             candidates.append((0 if in_window else 1, 0 if index == 1 else 1, distance, point))
@@ -176,10 +188,10 @@ def _clear_hit_point(player_pos, target_box, walls, can_ignore_walls, walls_bloc
     return None
 
 
-def _clamp_prediction_to_lane(player_pos, target, predicted, lead_distance, attack_range, target_box, close_override):
+def _clamp_prediction_to_lane(player_pos, target, predicted, lead_distance, attack_range, target_box, close_snap):
     if lead_distance <= 0:
         return predicted, lead_distance, ""
-    if close_override:
+    if close_snap:
         return target, 0.0, "close_snap_to_target"
 
     target_distance = math.hypot(target[0] - player_pos[0], target[1] - player_pos[1])
@@ -208,6 +220,103 @@ def _line_of_sight_clear(player_pos, target_pos, walls, can_ignore_walls, walls_
     if can_ignore_walls:
         return True
     return not walls_block_line_of_sight(player_pos, target_pos, walls)
+
+
+def _normalized_box(box):
+    x1, y1, x2, y2 = [float(value) for value in box[:4]]
+    return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+
+
+def _friendly_lane_padding(box, padding_ratio, min_padding, max_padding):
+    left, top, right, bottom = _normalized_box(box)
+    size = max(1.0, min(right - left, bottom - top))
+    return max(float(min_padding), min(float(max_padding), size * float(padding_ratio)))
+
+
+def _expand_box(box, padding):
+    left, top, right, bottom = _normalized_box(box)
+    padding = float(padding)
+    return left - padding, top - padding, right + padding, bottom + padding
+
+
+def _segment_intersects_box(p1, p2, box):
+    left, top, right, bottom = _normalized_box(box)
+    x1, y1 = float(p1[0]), float(p1[1])
+    x2, y2 = float(p2[0]), float(p2[1])
+    dx = x2 - x1
+    dy = y2 - y1
+    t_min = 0.0
+    t_max = 1.0
+
+    for p, q in (
+        (-dx, x1 - left),
+        (dx, right - x1),
+        (-dy, y1 - top),
+        (dy, bottom - y1),
+    ):
+        if abs(p) < 1e-9:
+            if q < 0:
+                return False
+            continue
+        ratio = q / p
+        if p < 0:
+            if ratio > t_max:
+                return False
+            t_min = max(t_min, ratio)
+        else:
+            if ratio < t_min:
+                return False
+            t_max = min(t_max, ratio)
+    return True
+
+
+def _friendly_lane_block_reason(
+    player_pos,
+    aim_point,
+    excluded_boxes,
+    enabled=True,
+    padding_ratio=0.25,
+    min_padding=8.0,
+    max_padding=28.0,
+):
+    if not enabled or not player_pos or not aim_point:
+        return ""
+    best_reason = ""
+    best_distance = float("inf")
+    for excluded in excluded_boxes or []:
+        excluded_box, kind = _excluded_box_and_kind(excluded)
+        if excluded_box is None or kind == "player":
+            continue
+        padding = _friendly_lane_padding(excluded_box, padding_ratio, min_padding, max_padding)
+        expanded = _expand_box(excluded_box, padding)
+        if not _segment_intersects_box(player_pos, aim_point, expanded):
+            continue
+        center = _center(excluded_box)
+        distance_to_friend = math.hypot(center[0] - float(player_pos[0]), center[1] - float(player_pos[1]))
+        if distance_to_friend < best_distance:
+            best_distance = distance_to_friend
+            best_reason = f"{kind}_lane:{padding:.1f}"
+    return best_reason
+
+
+def friendly_lane_block_reason(
+    player_pos,
+    aim_point,
+    excluded_boxes,
+    enabled=True,
+    padding_ratio=0.25,
+    min_padding=8.0,
+    max_padding=28.0,
+):
+    return _friendly_lane_block_reason(
+        player_pos,
+        aim_point,
+        excluded_boxes,
+        enabled=enabled,
+        padding_ratio=padding_ratio,
+        min_padding=min_padding,
+        max_padding=max_padding,
+    )
 
 
 def _box_iou(box_a, box_b):
@@ -278,10 +387,14 @@ def _friendly_exclusion_reason(enemy_box, excluded_boxes, iou_threshold, center_
 def _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox=None):
     distance = decision.distance if decision.distance is not None else float("inf")
     preferred_rank = 0 if preferred_target_bbox and _same_bbox_center(decision.target_bbox, preferred_target_bbox) else 1
+    box_score = _target_box_score(decision.target_bbox) if decision.target_bbox else 0.0
+    critical_close = distance <= max(75.0, float(dangerous_close_range or 0.0) * 0.55)
     if decision.should_fire:
-        return (0, 0 if decision.close_threat else 1, preferred_rank, distance, -(decision.confidence or 0.0))
+        close_rank = 0 if critical_close else 1 if decision.close_threat else 2
+        return (0, close_rank, preferred_rank, -box_score, -(decision.confidence or 0.0), distance)
     diagnostic_close = distance <= dangerous_close_range
-    return (1, 0 if diagnostic_close else 1, preferred_rank, distance, -(decision.confidence or 0.0))
+    close_rank = 0 if critical_close else 1 if diagnostic_close else 2
+    return (1, close_rank, preferred_rank, -box_score, -(decision.confidence or 0.0), distance)
 
 
 def choose_auto_aim(
@@ -309,6 +422,10 @@ def choose_auto_aim(
     friendly_center_distance_px=70,
     close_attack_requires_clear_hit_point=True,
     attack_wall_guard_enabled=True,
+    friendly_lane_guard_enabled=True,
+    friendly_lane_padding_ratio=0.25,
+    friendly_lane_min_padding=8.0,
+    friendly_lane_max_padding=28.0,
 ):
     if not player_pos:
         return AttackDecision(False, reason="target_invalid", denied_by="target_invalid")
@@ -364,7 +481,7 @@ def choose_auto_aim(
         closest_box_point = _closest_point_on_box(player_pos, enemy)
         closest_box_distance = math.hypot(closest_box_point[0] - player_pos[0], closest_box_point[1] - player_pos[1])
         center_los_clear = _line_of_sight_clear(player_pos, center, walls, can_ignore_walls, walls_block_line_of_sight)
-        clear_target = _clear_hit_point(
+        clear_target_wall_only = _clear_hit_point(
             player_pos,
             enemy,
             walls,
@@ -372,13 +489,44 @@ def choose_auto_aim(
             walls_block_line_of_sight,
             max_distance=attack_window,
         )
+        friendly_lane_status = ""
+        clear_target = None
+        if clear_target_wall_only is not None:
+            clear_target = _clear_hit_point(
+                player_pos,
+                enemy,
+                walls,
+                can_ignore_walls,
+                walls_block_line_of_sight,
+                max_distance=attack_window,
+                point_clear=lambda point: _friendly_lane_block_reason(
+                    player_pos,
+                    point,
+                    all_excluded_boxes,
+                    enabled=friendly_lane_guard_enabled,
+                    padding_ratio=friendly_lane_padding_ratio,
+                    min_padding=friendly_lane_min_padding,
+                    max_padding=friendly_lane_max_padding,
+                ),
+            )
+            if clear_target is None:
+                friendly_lane_status = _friendly_lane_block_reason(
+                    player_pos,
+                    clear_target_wall_only,
+                    all_excluded_boxes,
+                    enabled=friendly_lane_guard_enabled,
+                    padding_ratio=friendly_lane_padding_ratio,
+                    min_padding=friendly_lane_min_padding,
+                    max_padding=friendly_lane_max_padding,
+                ) or "friendly_lane"
         target = clear_target if clear_target is not None else center
         distance = math.hypot(target[0] - player_pos[0], target[1] - player_pos[1])
-        range_distance = distance if clear_target is not None else closest_box_distance
+        range_distance = distance if clear_target_wall_only is not None else closest_box_distance
         threat_distance = min(center_distance, range_distance)
         in_range = range_distance <= attack_window
         close_override = bool(close_range_override and threat_distance <= dangerous_close_range)
         use_tap = threat_distance <= close_tap_range
+        close_los_override_active = bool(close_override and threat_distance <= close_los_override_range)
         if not in_range:
             decision = AttackDecision(
                 False,
@@ -397,12 +545,37 @@ def choose_auto_aim(
                 target_bbox=tuple(enemy),
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
+                range_distance=range_distance,
             )
             if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
             continue
 
         target_los_clear = clear_target is not None
+        if not target_los_clear and friendly_lane_status:
+            decision = AttackDecision(
+                False,
+                target=clear_target_wall_only or center,
+                distance=range_distance,
+                attack_range=attack_range,
+                in_range=True,
+                line_of_sight=False,
+                reason="friendly_lane_blocked",
+                denied_by="friendly_lane_blocked",
+                use_tap=use_tap,
+                threshold=min_confidence,
+                close_threat=close_override,
+                close_range_override=close_override,
+                los_status=friendly_lane_status,
+                target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
+                range_distance=range_distance,
+                friendly_lane_status=friendly_lane_status,
+            )
+            if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
+                best = decision
+            continue
         if not target_los_clear:
             decision = AttackDecision(
                 False,
@@ -421,12 +594,13 @@ def choose_auto_aim(
                 target_bbox=tuple(enemy),
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
+                range_distance=range_distance,
             )
             if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
             continue
 
-        velocity = track_enemy_velocity(target, current_time)
+        velocity = track_enemy_velocity(center, current_time)
         current_velocity_confidence = (
             float(velocity_confidence())
             if callable(velocity_confidence)
@@ -447,7 +621,7 @@ def choose_auto_aim(
             lead_distance,
             attack_range,
             enemy,
-            close_override,
+            close_los_override_active,
         )
         predicted_distance = math.hypot(predicted[0] - player_pos[0], predicted[1] - player_pos[1])
         # Lead can push the aim point past attack_range*1.04 even when the enemy
@@ -484,13 +658,14 @@ def choose_auto_aim(
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
                 aim_fallback_reason=aim_fallback_reason,
+                range_distance=range_distance,
             )
             if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
             continue
 
         predicted_los_clear = _line_of_sight_clear(player_pos, predicted, walls, can_ignore_walls, walls_block_line_of_sight)
-        if not predicted_los_clear and not close_override:
+        if not predicted_los_clear and not close_los_override_active:
             decision = AttackDecision(
                 False,
                 target=target,
@@ -510,11 +685,12 @@ def choose_auto_aim(
                 target_bbox=tuple(enemy),
                 visible_enemy_count=visible_enemy_count,
                 closest_enemy_distance=closest_enemy_distance,
+                range_distance=range_distance,
             )
             if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
             continue
-        if not predicted_los_clear and close_override:
+        if not predicted_los_clear and close_los_override_active:
             predicted = target
             predicted_distance = distance
             lead_distance = 0.0
@@ -547,10 +723,64 @@ def choose_auto_aim(
                     visible_enemy_count=visible_enemy_count,
                     closest_enemy_distance=closest_enemy_distance,
                     aim_fallback_reason=aim_fallback_reason,
+                    range_distance=range_distance,
                 )
                 if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                     best = decision
                 continue
+
+        friendly_lane_status = _friendly_lane_block_reason(
+            player_pos,
+            predicted,
+            all_excluded_boxes,
+            enabled=friendly_lane_guard_enabled,
+            padding_ratio=friendly_lane_padding_ratio,
+            min_padding=friendly_lane_min_padding,
+            max_padding=friendly_lane_max_padding,
+        )
+        if friendly_lane_status and predicted != target:
+            target_lane_status = _friendly_lane_block_reason(
+                player_pos,
+                target,
+                all_excluded_boxes,
+                enabled=friendly_lane_guard_enabled,
+                padding_ratio=friendly_lane_padding_ratio,
+                min_padding=friendly_lane_min_padding,
+                max_padding=friendly_lane_max_padding,
+            )
+            if not target_lane_status:
+                predicted = target
+                predicted_distance = distance
+                lead_distance = 0.0
+                aim_fallback_reason = aim_fallback_reason or "friendly_lane_snap_to_target"
+                friendly_lane_status = ""
+        if friendly_lane_status:
+            decision = AttackDecision(
+                False,
+                target=target,
+                predicted=predicted,
+                distance=predicted_distance,
+                attack_range=attack_range,
+                in_range=True,
+                line_of_sight=False,
+                velocity=velocity,
+                reason="friendly_lane_blocked",
+                denied_by="friendly_lane_blocked",
+                use_tap=use_tap,
+                threshold=min_confidence,
+                close_threat=close_override,
+                close_range_override=close_override,
+                los_status=friendly_lane_status,
+                target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
+                aim_fallback_reason=aim_fallback_reason,
+                range_distance=range_distance,
+                friendly_lane_status=friendly_lane_status,
+            )
+            if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
+                best = decision
+            continue
 
         angle = _angle_from_direction(predicted[0] - player_pos[0], predicted[1] - player_pos[1])
         confidence = 1.0
@@ -607,6 +837,8 @@ def choose_auto_aim(
             visible_enemy_count=visible_enemy_count,
             closest_enemy_distance=closest_enemy_distance,
             aim_fallback_reason=aim_fallback_reason,
+            range_distance=range_distance,
+            friendly_lane_status=friendly_lane_status,
         )
 
         if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):

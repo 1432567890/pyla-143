@@ -83,7 +83,7 @@ class AutoAimTests(unittest.TestCase):
     def test_preferred_target_lock_cannot_force_shooting_teammate(self):
         decision = choose_auto_aim(
             player_pos=(0, 0),
-            enemy_data=[[100, -20, 140, 20], [210, -20, 250, 20]],
+            enemy_data=[[100, -20, 140, 20], [210, 50, 250, 90]],
             walls=[],
             attack_range=300,
             can_ignore_walls=False,
@@ -99,7 +99,7 @@ class AutoAimTests(unittest.TestCase):
         )
 
         self.assertTrue(decision.should_fire)
-        self.assertEqual(decision.target_bbox, (210, -20, 250, 20))
+        self.assertEqual(decision.target_bbox, (210, 50, 250, 90))
 
     def test_self_iou_overlap_does_not_block_close_enemy(self):
         decision = choose_auto_aim(
@@ -479,6 +479,128 @@ class AutoAimTests(unittest.TestCase):
         self.assertLessEqual(decision.predicted[0], 80)
         self.assertGreaterEqual(decision.predicted[1], -8)
         self.assertLessEqual(decision.predicted[1], 8)
+
+    def test_teammate_in_shot_lane_blocks_enemy_behind_them(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[190, -20, 230, 20]],
+            walls=[],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+            excluded_boxes=[{"box": [90, -14, 125, 14], "kind": "teammate"}],
+            friendly_lane_min_padding=8,
+            friendly_lane_max_padding=20,
+        )
+
+        self.assertFalse(decision.should_fire)
+        self.assertEqual(decision.denied_by, "friendly_lane_blocked")
+        self.assertIn("teammate_lane", decision.friendly_lane_status)
+
+    def test_teammate_outside_shot_lane_does_not_block_enemy(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[190, -20, 230, 20]],
+            walls=[],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+            excluded_boxes=[{"box": [90, 40, 125, 70], "kind": "teammate"}],
+            friendly_lane_min_padding=8,
+            friendly_lane_max_padding=20,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.target_bbox, (190, -20, 230, 20))
+        self.assertEqual(decision.friendly_lane_status, "")
+
+    def test_clear_edge_hit_point_is_used_when_teammate_blocks_center(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[190, -30, 230, 30]],
+            walls=[],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+            excluded_boxes=[{"box": [90, -4, 125, 4], "kind": "teammate"}],
+            friendly_lane_padding_ratio=0.10,
+            friendly_lane_min_padding=2,
+            friendly_lane_max_padding=2,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.target_bbox, (190, -30, 230, 30))
+        self.assertNotEqual(decision.target, (210.0, 0.0))
+        self.assertEqual(decision.friendly_lane_status, "")
+
+    def test_velocity_tracking_uses_bbox_center_not_clear_edge_point(self):
+        calls = []
+
+        def track_enemy_velocity(point, current_time):
+            calls.append((point, current_time))
+            return (0.0, 0.0)
+
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[200, -30, 240, 30]],
+            walls=[],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=track_enemy_velocity,
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(calls, [((220.0, 0.0), 1.0)])
+
+    def test_close_los_override_range_only_controls_close_prediction_snap(self):
+        def blocks_predicted_point(_p1, p2, _walls):
+            return p2[0] > 130
+
+        base_kwargs = dict(
+            player_pos=(0, 0),
+            enemy_data=[[100, -10, 120, 10]],
+            walls=[],
+            attack_range=320,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=blocks_predicted_point,
+            track_enemy_velocity=lambda *_args: (500.0, 0.0),
+            velocity_confidence=1.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+            close_tap_range=20,
+            dangerous_close_range=140,
+            close_range_override=True,
+        )
+        blocked = choose_auto_aim(**base_kwargs, close_los_override_range=50)
+        snapped = choose_auto_aim(**base_kwargs, close_los_override_range=130)
+
+        self.assertFalse(blocked.should_fire)
+        self.assertEqual(blocked.denied_by, "los_blocked")
+        self.assertEqual(blocked.los_status, "predicted_blocked")
+        self.assertTrue(snapped.should_fire)
+        self.assertEqual(snapped.predicted, snapped.target)
+        self.assertEqual(snapped.aim_fallback_reason, "close_snap_to_target")
 
 
 if __name__ == "__main__":

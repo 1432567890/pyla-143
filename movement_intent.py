@@ -104,6 +104,7 @@ def build_threat_state(
     teammate_near_range=360.0,
     wall_pressure=False,
     attack_lane_available=False,
+    low_health_threshold=0.42,
 ):
     reasons = []
     score = 0.0
@@ -150,7 +151,7 @@ def build_threat_state(
         score += 0.15
         reasons.append("outnumbered")
 
-    low_hp = health_ratio is not None and health_ratio <= 0.42
+    low_hp = health_ratio is not None and health_ratio <= float(low_health_threshold or 0.42)
     if low_hp:
         score += 0.24
         reasons.append("low_hp")
@@ -235,6 +236,7 @@ def build_movement_intent(
     teammate_angle=None,
     heal_retreat_angle=None,
     wall_escape_angle=None,
+    heal_attack_range=None,
 ):
     mode = choose_intent_mode(
         threat,
@@ -264,7 +266,11 @@ def build_movement_intent(
         vectors.append(MovementVector("heal", heal_retreat_angle or away_enemy_angle, 0.95, "retreat_heal"))
         if teammate_angle is not None:
             vectors.append(MovementVector("team", teammate_angle, 0.25, "regroup_with_teammate"))
-        attack_allowed = bool(enemy_distance is not None and enemy_distance <= max(120.0, attack_range * 0.30))
+        retreat_attack_range = max(
+            0.0,
+            float(heal_attack_range if heal_attack_range is not None else max(120.0, attack_range * 0.30)),
+        )
+        attack_allowed = bool(enemy_distance is not None and enemy_distance <= retreat_attack_range)
         hold_ms = 580
     elif mode == "kite":
         vectors.append(MovementVector("kite", away_enemy_angle, 0.80, "enemy_too_close"))

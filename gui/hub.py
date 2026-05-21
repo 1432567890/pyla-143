@@ -105,7 +105,7 @@ class Hub:
         self.bot_config.setdefault("movement_intent_max_hold_ms", 650)
         self.bot_config.setdefault("movement_intent_switch_score_threshold", 0.18)
         self.bot_config.setdefault("movement_intent_angle_smoothing", 0.35)
-        self.bot_config.setdefault("movement_intent_debug", "yes")
+        self.bot_config.setdefault("movement_intent_debug", "no")
         self.bot_config.setdefault("enable_joystick_movement", True)
         self.bot_config.setdefault("movement_input_mode", "auto")
         self.bot_config.setdefault("mans_threat_threshold", 0.42)
@@ -143,6 +143,7 @@ class Hub:
         self.general_config.setdefault("used_threads", self.general_config.get("onnx_cpu_threads", "auto"))
         self.general_config.setdefault("pyla_version", "0.8.1")
         self.general_config.setdefault("super_debug", "no")
+        self.general_config.setdefault("service_debug", "no")
         self.general_config.setdefault("cpu_or_gpu", "auto")
         self.general_config.setdefault("directml_device_id", "auto")
         self.general_config.setdefault("long_press_star_drop", "no")
@@ -967,6 +968,33 @@ class Hub:
         self.attach_tooltip(
             term_log_cb,
             "If enabled, terminal output is saved to logs/pyla_<date>.log files. Takes effect on next launch."
+        )
+        row_idx += 1
+
+        lbl_service_debug = ctk.CTkLabel(container, text="Service Debug:", font=font(S(18)))
+        lbl_service_debug.grid(row=row_idx, column=0, sticky="e", padx=S(20), pady=S(10))
+        service_debug_var = tk.BooleanVar(
+            value=(str(self.general_config["service_debug"]).lower() in ["yes", "true"])
+        )
+
+        def toggle_service_debug():
+            self.general_config["service_debug"] = "yes" if service_debug_var.get() else "no"
+            save_dict_as_toml(self.general_config, self.general_config_path)
+
+        service_debug_cb = ctk.CTkCheckBox(
+            container,
+            text="",
+            variable=service_debug_var,
+            command=toggle_service_debug,
+            fg_color=COLORS["accent_strong"],
+            hover_color=COLORS["accent"],
+            width=S(30),
+            height=S(30)
+        )
+        service_debug_cb.grid(row=row_idx, column=1, sticky="w", padx=S(20), pady=S(10))
+        self.attach_tooltip(
+            service_debug_cb,
+            "If enabled, routine recovery and service messages are printed. IPS remains visible even when disabled."
         )
         row_idx += 1
 

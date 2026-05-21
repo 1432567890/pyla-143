@@ -56,10 +56,11 @@ class HealthState:
     recent_damage: bool = False
     heal_active: bool = False
     source: str = "unknown"
+    low_threshold: float = 0.42
 
     @property
     def low(self):
-        return bool(self.heal_active or (self.ratio is not None and self.ratio <= 0.42))
+        return bool(self.heal_active or (self.ratio is not None and self.ratio <= float(self.low_threshold or 0.42)))
 
 
 @dataclass
