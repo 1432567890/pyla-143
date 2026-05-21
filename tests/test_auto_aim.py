@@ -197,6 +197,7 @@ class AutoAimTests(unittest.TestCase):
             dangerous_close_range=120,
             close_los_override_range=90,
             close_range_override=True,
+            wall_lane_guard_enabled=False,
         )
 
         self.assertTrue(decision.should_fire)
@@ -601,6 +602,106 @@ class AutoAimTests(unittest.TestCase):
         self.assertTrue(snapped.should_fire)
         self.assertEqual(snapped.predicted, snapped.target)
         self.assertEqual(snapped.aim_fallback_reason, "close_snap_to_target")
+
+    def test_wall_lane_guard_blocks_direct_fire_lane(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[190, -20, 230, 20]],
+            walls=[[90, -8, 120, 8]],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+        )
+
+        self.assertFalse(decision.should_fire)
+        self.assertEqual(decision.denied_by, "wall_blocked_final_hitpoint")
+        self.assertIn("wall_lane", decision.wall_lane_status)
+
+    def test_wall_outside_padded_lane_does_not_block_direct_fire(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[190, -20, 230, 20]],
+            walls=[[90, 20, 120, 40]],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.wall_lane_status, "")
+
+    def test_wall_lane_guard_uses_clear_edge_when_center_is_blocked(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[190, -20, 230, 20]],
+            walls=[[90, -2, 120, 2]],
+            attack_range=300,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+            wall_lane_padding_ratio=0,
+            wall_lane_min_padding=0,
+            wall_lane_max_padding=0,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertNotEqual(decision.target, (210.0, 0.0))
+        self.assertEqual(decision.wall_lane_status, "")
+
+    def test_close_los_snap_does_not_bypass_final_wall_lane_guard(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[100, -10, 120, 10]],
+            walls=[[48, -8, 68, 8]],
+            attack_range=320,
+            can_ignore_walls=False,
+            walls_block_line_of_sight=lambda *_args: False,
+            track_enemy_velocity=lambda *_args: (500.0, 0.0),
+            velocity_confidence=1.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+            close_tap_range=20,
+            dangerous_close_range=140,
+            close_range_override=True,
+            close_los_override_range=130,
+        )
+
+        self.assertFalse(decision.should_fire)
+        self.assertEqual(decision.denied_by, "wall_blocked_final_hitpoint")
+        self.assertIn("wall_lane", decision.wall_lane_status)
+
+    def test_wall_ignore_brawler_can_still_fire_through_walls(self):
+        decision = choose_auto_aim(
+            player_pos=(0, 0),
+            enemy_data=[[190, -20, 230, 20]],
+            walls=[[90, -20, 120, 20]],
+            attack_range=300,
+            can_ignore_walls=True,
+            walls_block_line_of_sight=lambda *_args: True,
+            track_enemy_velocity=lambda *_args: (0.0, 0.0),
+            velocity_confidence=0.0,
+            projectile_speed=900,
+            current_time=1.0,
+            min_confidence=0.30,
+        )
+
+        self.assertTrue(decision.should_fire)
+        self.assertEqual(decision.wall_lane_status, "")
 
 
 if __name__ == "__main__":

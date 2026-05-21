@@ -9,7 +9,7 @@ from collections import deque
 import cv2
 import numpy as np
 from state_finder import get_state
-from auto_aim import choose_auto_aim, detect_aim_line_angle, friendly_lane_block_reason
+from auto_aim import choose_auto_aim, detect_aim_line_angle, friendly_lane_block_reason, wall_lane_block_reason
 from combat_brain import (
     CombatFrame,
     HealthState,
@@ -258,6 +258,10 @@ class Movement:
         self.friendly_fire_lane_max_padding = float(bot_config.get("friendly_fire_lane_max_padding", 28))
         self.close_attack_requires_clear_hit_point = str(bot_config.get("close_attack_requires_clear_hit_point", "true")).lower() in ("yes", "true", "1")
         self.attack_wall_guard_enabled = str(bot_config.get("attack_wall_guard_enabled", "true")).lower() in ("yes", "true", "1")
+        self.auto_aim_wall_lane_guard_enabled = str(bot_config.get("auto_aim_wall_lane_guard_enabled", "true")).lower() in ("yes", "true", "1")
+        self.auto_aim_wall_lane_padding_ratio = float(bot_config.get("auto_aim_wall_lane_padding_ratio", 0.08))
+        self.auto_aim_wall_lane_min_padding = float(bot_config.get("auto_aim_wall_lane_min_padding", 6))
+        self.auto_aim_wall_lane_max_padding = float(bot_config.get("auto_aim_wall_lane_max_padding", 18))
         self._last_ability_plan_log = 0.0
         self._target_memory = TargetMemory()
         self._tactical_adaptation = {
@@ -376,6 +380,28 @@ class Movement:
             max_padding=getattr(self, "friendly_fire_lane_max_padding", 28.0),
         )
 
+    def wall_lane_reason(self, brawler, player_pos, aim_point, walls):
+        if not getattr(self, "attack_wall_guard_enabled", True):
+            return ""
+        can_ignore_walls = self.can_attack_through_walls(brawler, "attack", self.brawlers_info)
+        if can_ignore_walls:
+            return ""
+        reason = wall_lane_block_reason(
+            player_pos,
+            aim_point,
+            walls or [],
+            enabled=getattr(self, "auto_aim_wall_lane_guard_enabled", True),
+            can_ignore_walls=can_ignore_walls,
+            padding_ratio=getattr(self, "auto_aim_wall_lane_padding_ratio", 0.08),
+            min_padding=getattr(self, "auto_aim_wall_lane_min_padding", 6.0),
+            max_padding=getattr(self, "auto_aim_wall_lane_max_padding", 18.0),
+        )
+        if reason:
+            return reason
+        if player_pos and aim_point and self.walls_block_line_of_sight(player_pos, aim_point, walls or []):
+            return "wall_los"
+        return ""
+
     def build_attack_excluded_boxes(self, player_data=None, teammate_data=None):
         boxes = []
         if teammate_data:
@@ -493,6 +519,10 @@ class Movement:
             friendly_center_distance_px=getattr(self, "friendly_fire_center_distance_px", 70),
             close_attack_requires_clear_hit_point=getattr(self, "close_attack_requires_clear_hit_point", True),
             attack_wall_guard_enabled=getattr(self, "attack_wall_guard_enabled", True),
+            wall_lane_guard_enabled=getattr(self, "auto_aim_wall_lane_guard_enabled", True),
+            wall_lane_padding_ratio=getattr(self, "auto_aim_wall_lane_padding_ratio", 0.08),
+            wall_lane_min_padding=getattr(self, "auto_aim_wall_lane_min_padding", 6.0),
+            wall_lane_max_padding=getattr(self, "auto_aim_wall_lane_max_padding", 18.0),
             friendly_lane_guard_enabled=getattr(self, "friendly_fire_lane_guard_enabled", True),
             friendly_lane_padding_ratio=getattr(self, "friendly_fire_lane_padding_ratio", 0.25),
             friendly_lane_min_padding=getattr(self, "friendly_fire_lane_min_padding", 8.0),
@@ -558,7 +588,8 @@ class Movement:
             f"visible_enemy_count={decision.visible_enemy_count} "
             f"target={target_s} target_bbox={decision.target_bbox} selected_target={target_s} "
             f"closest_enemy_distance={closest_s} selected_distance={dist_s} range_distance={range_s} attack_range={int(attack_range)} "
-            f"in_range={decision.in_range} line_of_sight={decision.los_status} friendly_lane={decision.friendly_lane_status or 'clear'} "
+            f"in_range={decision.in_range} line_of_sight={decision.los_status} "
+            f"wall_lane={decision.wall_lane_status or 'clear'} friendly_lane={decision.friendly_lane_status or 'clear'} "
             f"confidence={decision.confidence:.2f} confidence_threshold={decision.threshold:.2f} "
             f"close_threat={decision.close_threat} close_range_override={decision.close_range_override} "
             f"attack_spam_active={attack_spam_active} effective_cooldown_ms={int(max(0.0, cooldown_s) * 1000)} "
@@ -566,7 +597,7 @@ class Movement:
             f"aim_duration_ms={int(max(0.0, duration_s) * 1000)} movement_active={movement_active} "
             f"cooldown_remaining_ms={int(decision.cooldown_remaining_ms or 0)} "
             f"input_busy={input_busy} aim_frequency_hz={aim_frequency_hz:.2f} input_mode={input_mode} tap={decision.use_tap} "
-            f"predicted_point={predicted_s} angle={angle_s} "
+            f"predicted_point={predicted_s} final_aim={predicted_s or target_s} angle={angle_s} "
             f"fallback_reason={decision.aim_fallback_reason or 'none'} reason={decision.reason}"
         )
 
@@ -877,20 +908,25 @@ class Movement:
                 current_time=now,
                 excluded_boxes=excluded_boxes,
             )
-        elif getattr(self, "friendly_fire_guard_enabled", True) and decision.target_bbox:
-            reason = self.friendly_overlap_reason(decision.target_bbox, excluded_boxes or [])
-            denied_by = "friendly_excluded"
-            if not reason:
-                aim_point = decision.predicted or decision.target
-                reason = self.friendly_lane_reason(player_pos, aim_point, excluded_boxes or [])
-                denied_by = "friendly_lane_blocked"
+        elif decision.target_bbox:
+            aim_point = decision.predicted or decision.target
+            reason = self.wall_lane_reason(brawler, player_pos, aim_point, walls)
+            denied_by = "wall_blocked_final_hitpoint"
+            if not reason and getattr(self, "friendly_fire_guard_enabled", True):
+                reason = self.friendly_overlap_reason(decision.target_bbox, excluded_boxes or [])
+                denied_by = "friendly_excluded"
+                if not reason:
+                    reason = self.friendly_lane_reason(player_pos, aim_point, excluded_boxes or [])
+                    denied_by = "friendly_lane_blocked"
             if reason:
                 decision.should_fire = False
                 decision.denied_by = denied_by
-                decision.reason = denied_by
+                decision.reason = "los_blocked" if denied_by == "wall_blocked_final_hitpoint" else denied_by
                 decision.los_status = reason
                 if denied_by == "friendly_lane_blocked":
                     decision.friendly_lane_status = reason
+                elif denied_by == "wall_blocked_final_hitpoint":
+                    decision.wall_lane_status = reason
         input_mode = "tap" if decision.use_tap else "aimed_drag"
         if not getattr(self, "aimed_attacks_enabled", False) or not hasattr(self.window_controller, "aim_attack_angle"):
             input_mode = "tap_fallback"

@@ -28,6 +28,7 @@ class AttackDecision:
     aim_fallback_reason: str = ""
     range_distance: float = None
     friendly_lane_status: str = ""
+    wall_lane_status: str = ""
 
 
 AutoAimDecision = AttackDecision
@@ -299,6 +300,57 @@ def _friendly_lane_block_reason(
     return best_reason
 
 
+def _wall_lane_block_reason(
+    player_pos,
+    aim_point,
+    walls,
+    enabled=True,
+    can_ignore_walls=False,
+    padding_ratio=0.08,
+    min_padding=6.0,
+    max_padding=18.0,
+):
+    if not enabled or can_ignore_walls or not player_pos or not aim_point or not walls:
+        return ""
+    best_reason = ""
+    best_distance = float("inf")
+    for wall in walls or []:
+        if wall is None:
+            continue
+        padding = _friendly_lane_padding(wall, padding_ratio, min_padding, max_padding)
+        expanded = _expand_box(wall, padding)
+        if not _segment_intersects_box(player_pos, aim_point, expanded):
+            continue
+        center = _center(wall)
+        distance_to_wall = math.hypot(center[0] - float(player_pos[0]), center[1] - float(player_pos[1]))
+        if distance_to_wall < best_distance:
+            best_distance = distance_to_wall
+            best_reason = f"wall_lane:{padding:.1f}"
+    return best_reason
+
+
+def wall_lane_block_reason(
+    player_pos,
+    aim_point,
+    walls,
+    enabled=True,
+    can_ignore_walls=False,
+    padding_ratio=0.08,
+    min_padding=6.0,
+    max_padding=18.0,
+):
+    return _wall_lane_block_reason(
+        player_pos,
+        aim_point,
+        walls,
+        enabled=enabled,
+        can_ignore_walls=can_ignore_walls,
+        padding_ratio=padding_ratio,
+        min_padding=min_padding,
+        max_padding=max_padding,
+    )
+
+
 def friendly_lane_block_reason(
     player_pos,
     aim_point,
@@ -422,6 +474,10 @@ def choose_auto_aim(
     friendly_center_distance_px=70,
     close_attack_requires_clear_hit_point=True,
     attack_wall_guard_enabled=True,
+    wall_lane_guard_enabled=True,
+    wall_lane_padding_ratio=0.08,
+    wall_lane_min_padding=6.0,
+    wall_lane_max_padding=18.0,
     friendly_lane_guard_enabled=True,
     friendly_lane_padding_ratio=0.25,
     friendly_lane_min_padding=8.0,
@@ -481,7 +537,17 @@ def choose_auto_aim(
         closest_box_point = _closest_point_on_box(player_pos, enemy)
         closest_box_distance = math.hypot(closest_box_point[0] - player_pos[0], closest_box_point[1] - player_pos[1])
         center_los_clear = _line_of_sight_clear(player_pos, center, walls, can_ignore_walls, walls_block_line_of_sight)
-        clear_target_wall_only = _clear_hit_point(
+        wall_lane_clear = lambda point: _wall_lane_block_reason(
+            player_pos,
+            point,
+            walls,
+            enabled=bool(attack_wall_guard_enabled and wall_lane_guard_enabled),
+            can_ignore_walls=can_ignore_walls,
+            padding_ratio=wall_lane_padding_ratio,
+            min_padding=wall_lane_min_padding,
+            max_padding=wall_lane_max_padding,
+        )
+        clear_target_standard = _clear_hit_point(
             player_pos,
             enemy,
             walls,
@@ -489,6 +555,20 @@ def choose_auto_aim(
             walls_block_line_of_sight,
             max_distance=attack_window,
         )
+        clear_target_wall_only = None
+        wall_lane_status = ""
+        if clear_target_standard is not None:
+            clear_target_wall_only = _clear_hit_point(
+                player_pos,
+                enemy,
+                walls,
+                can_ignore_walls,
+                walls_block_line_of_sight,
+                max_distance=attack_window,
+                point_clear=wall_lane_clear,
+            )
+            if clear_target_wall_only is None:
+                wall_lane_status = wall_lane_clear(clear_target_standard) or "wall_lane"
         friendly_lane_status = ""
         clear_target = None
         if clear_target_wall_only is not None:
@@ -499,15 +579,15 @@ def choose_auto_aim(
                 can_ignore_walls,
                 walls_block_line_of_sight,
                 max_distance=attack_window,
-                point_clear=lambda point: _friendly_lane_block_reason(
-                    player_pos,
-                    point,
-                    all_excluded_boxes,
-                    enabled=friendly_lane_guard_enabled,
-                    padding_ratio=friendly_lane_padding_ratio,
-                    min_padding=friendly_lane_min_padding,
-                    max_padding=friendly_lane_max_padding,
-                ),
+                point_clear=lambda point: wall_lane_clear(point) or _friendly_lane_block_reason(
+                        player_pos,
+                        point,
+                        all_excluded_boxes,
+                        enabled=friendly_lane_guard_enabled,
+                        padding_ratio=friendly_lane_padding_ratio,
+                        min_padding=friendly_lane_min_padding,
+                        max_padding=friendly_lane_max_padding,
+                    ),
             )
             if clear_target is None:
                 friendly_lane_status = _friendly_lane_block_reason(
@@ -519,9 +599,9 @@ def choose_auto_aim(
                     min_padding=friendly_lane_min_padding,
                     max_padding=friendly_lane_max_padding,
                 ) or "friendly_lane"
-        target = clear_target if clear_target is not None else center
+        target = clear_target if clear_target is not None else clear_target_wall_only or clear_target_standard or center
         distance = math.hypot(target[0] - player_pos[0], target[1] - player_pos[1])
-        range_distance = distance if clear_target_wall_only is not None else closest_box_distance
+        range_distance = distance if clear_target_standard is not None else closest_box_distance
         threat_distance = min(center_distance, range_distance)
         in_range = range_distance <= attack_window
         close_override = bool(close_range_override and threat_distance <= dangerous_close_range)
@@ -552,6 +632,30 @@ def choose_auto_aim(
             continue
 
         target_los_clear = clear_target is not None
+        if not target_los_clear and wall_lane_status:
+            decision = AttackDecision(
+                False,
+                target=clear_target_standard or center,
+                distance=range_distance,
+                attack_range=attack_range,
+                in_range=True,
+                line_of_sight=False,
+                reason="los_blocked",
+                denied_by="wall_blocked_final_hitpoint",
+                use_tap=use_tap,
+                threshold=min_confidence,
+                close_threat=close_override,
+                close_range_override=close_override,
+                los_status=wall_lane_status,
+                target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
+                range_distance=range_distance,
+                wall_lane_status=wall_lane_status,
+            )
+            if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
+                best = decision
+            continue
         if not target_los_clear and friendly_lane_status:
             decision = AttackDecision(
                 False,
@@ -572,6 +676,7 @@ def choose_auto_aim(
                 closest_enemy_distance=closest_enemy_distance,
                 range_distance=range_distance,
                 friendly_lane_status=friendly_lane_status,
+                wall_lane_status=wall_lane_status,
             )
             if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
@@ -724,10 +829,48 @@ def choose_auto_aim(
                     closest_enemy_distance=closest_enemy_distance,
                     aim_fallback_reason=aim_fallback_reason,
                     range_distance=range_distance,
+                    wall_lane_status="wall_los",
                 )
                 if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                     best = decision
                 continue
+
+        wall_lane_status = wall_lane_clear(predicted)
+        if wall_lane_status and predicted != target:
+            target_wall_status = wall_lane_clear(target)
+            if not target_wall_status:
+                predicted = target
+                predicted_distance = distance
+                lead_distance = 0.0
+                aim_fallback_reason = aim_fallback_reason or "wall_lane_snap_to_target"
+                wall_lane_status = ""
+        if wall_lane_status:
+            decision = AttackDecision(
+                False,
+                target=target,
+                predicted=predicted,
+                distance=predicted_distance,
+                attack_range=attack_range,
+                in_range=True,
+                line_of_sight=False,
+                velocity=velocity,
+                reason="los_blocked",
+                denied_by="wall_blocked_final_hitpoint",
+                use_tap=use_tap,
+                threshold=min_confidence,
+                close_threat=close_override,
+                close_range_override=close_override,
+                los_status=wall_lane_status,
+                target_bbox=tuple(enemy),
+                visible_enemy_count=visible_enemy_count,
+                closest_enemy_distance=closest_enemy_distance,
+                aim_fallback_reason=aim_fallback_reason,
+                range_distance=range_distance,
+                wall_lane_status=wall_lane_status,
+            )
+            if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
+                best = decision
+            continue
 
         friendly_lane_status = _friendly_lane_block_reason(
             player_pos,
@@ -777,6 +920,7 @@ def choose_auto_aim(
                 aim_fallback_reason=aim_fallback_reason,
                 range_distance=range_distance,
                 friendly_lane_status=friendly_lane_status,
+                wall_lane_status=wall_lane_status,
             )
             if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):
                 best = decision
@@ -839,6 +983,7 @@ def choose_auto_aim(
             aim_fallback_reason=aim_fallback_reason,
             range_distance=range_distance,
             friendly_lane_status=friendly_lane_status,
+            wall_lane_status=wall_lane_status,
         )
 
         if best is None or _decision_sort_key(decision, dangerous_close_range, preferred_target_bbox) < _decision_sort_key(best, dangerous_close_range, preferred_target_bbox):

@@ -113,6 +113,11 @@ class CombatAdaptationTests(unittest.TestCase):
         play.friendly_fire_lane_padding_ratio = 0.25
         play.friendly_fire_lane_min_padding = 8
         play.friendly_fire_lane_max_padding = 28
+        play.attack_wall_guard_enabled = True
+        play.auto_aim_wall_lane_guard_enabled = True
+        play.auto_aim_wall_lane_padding_ratio = 0.08
+        play.auto_aim_wall_lane_min_padding = 6
+        play.auto_aim_wall_lane_max_padding = 18
         play.lead_shots_enabled = True
         play.aimed_attacks_enabled = True
         play.enemy_velocity_confidence = 1.0
@@ -317,6 +322,42 @@ class CombatAdaptationTests(unittest.TestCase):
         self.assertEqual(decision.denied_by, "friendly_lane_blocked")
         self.assertIn("teammate_lane", decision.friendly_lane_status)
 
+    def test_auto_aim_attack_rechecks_precomputed_decision_against_wall_lane(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angle = angle
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        decision = AttackDecision(
+            True,
+            aim_angle=0.0,
+            target=(210, 0),
+            predicted=(210, 0),
+            distance=210,
+            attack_range=300,
+            in_range=True,
+            line_of_sight=True,
+            target_bbox=(190, -20, 230, 20),
+        )
+
+        fired = play.auto_aim_attack(
+            "shelly",
+            (0, 0),
+            [[190, -20, 230, 20]],
+            [[90, -8, 120, 8]],
+            attack_range=300,
+            decision=decision,
+        )
+
+        self.assertFalse(fired)
+        self.assertIsNone(window.angle)
+        self.assertEqual(decision.denied_by, "wall_blocked_final_hitpoint")
+        self.assertIn("wall_lane", decision.wall_lane_status)
+
     def test_playstyle_auto_aim_wrapper_passes_friendly_exclusions(self):
         class AimWindow:
             def __init__(self):
@@ -348,6 +389,43 @@ class CombatAdaptationTests(unittest.TestCase):
             [0, -20, 40, 20],
             [[190, -20, 230, 20]],
             [],
+            "shelly",
+        )
+
+        self.assertIsNone(movement)
+        self.assertIsNone(window.angle)
+
+    def test_playstyle_auto_aim_wrapper_blocks_wall_lane(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angle = angle
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.playstyle_code = compile("auto_aim_attack(300)", "<test_playstyle>", "exec")
+        play.time_since_holding_attack = None
+        play.TILE_SIZE = 60
+        play.game_mode = 3
+        play.seconds_to_hold_attack_after_reaching_max = 1.5
+        play.is_hypercharge_ready = False
+        play.should_use_gadget = False
+        play.is_gadget_ready = False
+        play.is_super_ready = False
+        play._playstyle_error_reported = False
+        play.attack = lambda *args, **kwargs: True
+        play.use_hypercharge = lambda: True
+        play.use_gadget = lambda: True
+        play.use_super = lambda: True
+        play.clear_ability_ready = lambda _ability: None
+        play.last_playstyle_teammate_data = []
+
+        movement = play.run_playstyle(
+            [0, -20, 40, 20],
+            [[190, -20, 230, 20]],
+            [[90, -8, 120, 8]],
             "shelly",
         )
 
@@ -386,6 +464,43 @@ class CombatAdaptationTests(unittest.TestCase):
             [],
             "shelly",
             teammate_data=[[90, -14, 125, 14]],
+        )
+
+        self.assertEqual(movement, "DW")
+        self.assertIsNone(window.angle)
+
+    def test_legacy_get_movement_can_move_toward_wall_blocked_enemy_without_firing(self):
+        class AimWindow:
+            def __init__(self):
+                self.angle = None
+
+            def aim_attack_angle(self, angle, **kwargs):
+                self.angle = angle
+
+        window = AimWindow()
+        play = self.make_auto_aim_play(window)
+        play.playstyle_code = None
+        play.brawlers_info = {"shelly": {"hold_attack": 0, "ignore_walls_for_attacks": False}}
+        play.current_brawler = "shelly"
+        play.time_since_holding_attack = None
+        play.seconds_to_hold_attack_after_reaching_max = 1.5
+        play.get_brawler_range = lambda _brawler: (100, 300, 300)
+        play.last_movement = "D"
+        play.last_movement_time = 0.0
+        play.minimum_movement_delay = 0.0
+        play.game_mode = 3
+        play.strafe_enabled = False
+        play.no_enemy_movement = lambda *_args, **_kwargs: "W"
+        play.is_path_blocked = lambda *_args, **_kwargs: False
+        play.try_use_super_on_enemy = lambda *_args, **_kwargs: False
+        play.should_use_gadget_on_enemy = lambda *_args, **_kwargs: False
+
+        movement = play.get_movement(
+            [0, -20, 40, 20],
+            [[190, -20, 230, 20]],
+            [[90, -8, 120, 8]],
+            "shelly",
+            teammate_data=[],
         )
 
         self.assertEqual(movement, "DW")
